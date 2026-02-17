@@ -70,9 +70,12 @@ Run an iterative LLM agent (eval → improve loop):
 
 ```bash
 uv run python main.py --agent gemini_sdk --loops 5
+
+# If the LLM provider's safety filters block dataset content, omit raw query text from prompts:
+uv run python main.py --agent gemini_sdk --loops 5 --no-query-text
 ```
 
-The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats.
+The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats. `--no-query-text` strips the raw query strings from that feedback while preserving query IDs, doc IDs, and rank signals.
 
 ## Dataset
 

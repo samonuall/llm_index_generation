@@ -122,7 +122,11 @@ iteration, so code changes take effect without restarting.
 
 ```bash
 uv run python main.py --agent gemini_sdk --loops 5
+uv run python main.py --agent gemini_sdk --loops 5 --no-query-text
 ```
+
+`--no-query-text` omits raw query strings from the per-query feedback in the prompt. Use this when
+the LLM provider's safety filters block content from the dataset queries.
 
 Agents are registered in `main.py`. Add a new `elif` branch to support a new agent.
 
