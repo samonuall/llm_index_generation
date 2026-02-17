@@ -1,18 +1,22 @@
 """
 agent.py – Proposal 1: Gemini-backed iterative preprocessing agent.
 
-Uses the `gemini` CLI to iteratively improve preprocess.py based on eval
-feedback from the static BM25 harness.
+Uses the google-genai Python SDK to iteratively improve preprocess.py based
+on eval feedback from the static BM25 harness.
 """
 
 from __future__ import annotations
 
-import subprocess
+import re
 import sys
 import pathlib
 import datetime
 
+from dotenv import load_dotenv
+from google import genai
+
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
+load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
 
 # Make src/agents importable so AgentRunner resolves
@@ -22,15 +26,18 @@ if str(_SRC_AGENTS_DIR) not in sys.path:
 
 from agent_runner import AgentRunner  # type: ignore
 
+_MODEL = "gemini-3-flash"
+
 
 class Proposal1Agent(AgentRunner):
     agent_name = "proposal_1"
 
     def __init__(self) -> None:
         context_dir = _AGENT_DIR / "context"
-        dataset_info = (context_dir / "DATASET_INFO.md").read_text(encoding="utf-8")
+        dataset_info = (_SRC_AGENTS_DIR / "CONTEXT.md").read_text(encoding="utf-8")
         template = (context_dir / "SYSTEM_INSTRUCTION.md").read_text(encoding="utf-8")
         self._system_instruction = template.replace("{dataset_info}", dataset_info)
+        self._client = genai.Client()
 
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
         preprocess_path = _AGENT_DIR / "preprocess.py"
@@ -60,36 +67,26 @@ class Proposal1Agent(AgentRunner):
 
         print(f"[proposal_1] Calling Gemini (iteration {iteration + 1}) ...")
 
+        response = self._client.models.generate_content(
+            model=_MODEL,
+            contents=prompt,
+        )
+        text = response.text or ""
+
         with log_path.open("w", encoding="utf-8") as log_file:
             log_file.write(header)
-            log_file.flush()
+            log_file.write(text)
 
-            process = subprocess.Popen(
-                [
-                    "gemini",
-                    "-y",
-                    "-m", "gemini-3-flash-preview",
-                    "-p", prompt,
-                ],
-                cwd=str(_PROJECT_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-            )
+        print(text)
 
-            for line in process.stdout:  # type: ignore[union-attr]
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                log_file.write(line)
-                log_file.flush()
-
-            process.wait()
-
-        if process.returncode != 0:
-            print(
-                f"[proposal_1] Warning: gemini exited with code {process.returncode}. "
-                f"See {log_path}"
-            )
+        # Extract the first ```python ... ``` block and write it to preprocess.py
+        match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
+        if match:
+            code = match.group(1).rstrip()
+            preprocess_path = _AGENT_DIR / "preprocess.py"
+            preprocess_path.write_text(code + "\n", encoding="utf-8")
+            print(f"[proposal_1] preprocess.py updated ({len(code.splitlines())} lines).")
         else:
-            print(f"[proposal_1] Iteration {iteration + 1} complete. Log: {log_path}")
+            print("[proposal_1] Warning: no ```python``` block found in response — preprocess.py unchanged.")
+
+        print(f"[proposal_1] Iteration {iteration + 1} complete. Log: {log_path}")

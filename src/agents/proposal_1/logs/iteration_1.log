@@ -1,2 +1,62 @@
-=== Iteration 1 | 2026-02-17T14:11:19 ===
+=== Iteration 1 | 2026-02-17T14:49:06 ===
 
+```python
+import sys, pathlib
+sys.path.insert(0, str(pathbi.Path(__file__).parents[2] / "evaluation"))
+
+from typing import List
+from schema import Document, Chunk
+from base import BasePreprocessor
+
+class Preprocessor(BasePreprocessor):
+    name = "bm25_paragraph_preprocessor"
+    description = "Splits Wikipedia articles into paragraphs for BM25 indexing, ensuring at least one chunk per document."
+
+    def preprocess(self, docs: List[Document]) -> List[Chunk]:
+        all_chunks: List[Chunk] = []
+        for doc in docs:
+            doc_id = doc.doc_id
+            
+            # Split the document text by newlines to get potential paragraphs.
+            # This is a common heuristic for Wikipedia articles.
+            paragraphs = doc.text.split('\n')
+            
+            current_doc_chunks: List[Chunk] = []
+            chunk_idx = 0
+            
+            for para in paragraphs:
+                # Strip leading/trailing whitespace to clean up paragraphs
+                stripped_para = para.strip()
+                
+                # Only create a chunk if the paragraph is not empty after stripping.
+                # Empty paragraphs would not contribute to indexing and can be skipped.
+                if stripped_para:
+                    chunk = Chunk(
+                        doc_id=doc_id,
+                        chunk_id=f"{doc_id}_{chunk_idx}", # Ensure unique ID within the document
+                        text=stripped_para,
+                        metadata=doc.metadata # Carry over original document metadata
+                    )
+                    current_doc_chunks.append(chunk)
+                    chunk_idx += 1
+            
+            # Constraint: Return at least one Chunk per Document.
+            # If no paragraphs were found or all were empty/whitespace,
+            # create one placeholder chunk for the document.
+            if not current_doc_chunks:
+                # This chunk will have empty text, which the BM25 retriever will handle
+                # (likely resulting in no indexed terms from this specific chunk).
+                chunk = Chunk(
+                    doc_id=doc_id,
+                    chunk_id=f"{doc_id}_0", # Still needs a unique ID, '0' is safe if no other chunks were made
+                    text="", # Empty text for documents with no substantive content
+                    metadata=doc.metadata
+                )
+                all_chunks.append(chunk)
+            else:
+                # Add all valid chunks from the current document to the global list
+                all_chunks.extend(current_doc_chunks)
+        
+        return all_chunks
+
+```
