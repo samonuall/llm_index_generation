@@ -88,6 +88,7 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
 
     recall_hits = 0
     mrr_total = 0.0
+    query_results = []
 
     for query in queries:
         results = index.search(query.query_text, top_k=top_k)
@@ -95,14 +96,29 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
         relevant = set(query.relevant_doc_ids)
 
         # Recall@k
-        if any(doc_id in relevant for doc_id in retrieved_doc_ids):
+        hit = any(doc_id in relevant for doc_id in retrieved_doc_ids)
+        if hit:
             recall_hits += 1
 
         # MRR: reciprocal rank of first relevant doc
+        reciprocal_rank = 0.0
+        rank_of_first_hit = None
         for rank, doc_id in enumerate(retrieved_doc_ids, start=1):
             if doc_id in relevant:
-                mrr_total += 1.0 / rank
+                reciprocal_rank = 1.0 / rank
+                rank_of_first_hit = rank
+                mrr_total += reciprocal_rank
                 break
+
+        query_results.append({
+            "query_id": query.query_id,
+            "query_text": query.query_text,
+            "relevant_doc_ids": list(query.relevant_doc_ids),
+            "retrieved_doc_ids": retrieved_doc_ids,
+            "hit": hit,
+            "rank": rank_of_first_hit,
+            "reciprocal_rank": reciprocal_rank,
+        })
 
     n = len(queries)
     recall_at_k = recall_hits / n
@@ -120,6 +136,7 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
         "top_k": top_k,
         "n_queries": n,
         "n_chunks": len(chunks),
+        "query_results": query_results,
     }
 
 

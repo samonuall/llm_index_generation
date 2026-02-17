@@ -1,62 +1,86 @@
-=== Iteration 1 | 2026-02-17T14:49:06 ===
+=== Iteration 1 | 2026-02-17T14:54:06 ===
 
 ```python
 import sys, pathlib
-sys.path.insert(0, str(pathbi.Path(__file__).parents[2] / "evaluation"))
-
 from typing import List
+
+# Ensure the evaluation modules are accessible
+eval_path = str(pathlib.Path(__file__).parents[2] / "evaluation")
+if eval_path not in sys.path:
+    sys.path.insert(0, eval_path)
+
 from schema import Document, Chunk
 from base import BasePreprocessor
 
 class Preprocessor(BasePreprocessor):
-    name = "bm25_paragraph_preprocessor"
-    description = "Splits Wikipedia articles into paragraphs for BM25 indexing, ensuring at least one chunk per document."
+    name = "proposal_1"
+    description = "Wikipedia Lead-focused chunking with Title propagation for BM25 optimization."
 
     def preprocess(self, docs: List[Document]) -> List[Chunk]:
-        all_chunks: List[Chunk] = []
+        """
+        Preprocesses Wikipedia documents for BM25 retrieval by focusing on the 
+        lead sections where 'tip of the tongue' information is most concentrated.
+        """
+        all_chunks = []
+
         for doc in docs:
             doc_id = doc.doc_id
-            
-            # Split the document text by newlines to get potential paragraphs.
-            # This is a common heuristic for Wikipedia articles.
-            paragraphs = doc.text.split('\n')
-            
-            current_doc_chunks: List[Chunk] = []
-            chunk_idx = 0
-            
-            for para in paragraphs:
-                # Strip leading/trailing whitespace to clean up paragraphs
-                stripped_para = para.strip()
-                
-                # Only create a chunk if the paragraph is not empty after stripping.
-                # Empty paragraphs would not contribute to indexing and can be skipped.
-                if stripped_para:
-                    chunk = Chunk(
-                        doc_id=doc_id,
-                        chunk_id=f"{doc_id}_{chunk_idx}", # Ensure unique ID within the document
-                        text=stripped_para,
-                        metadata=doc.metadata # Carry over original document metadata
-                    )
-                    current_doc_chunks.append(chunk)
-                    chunk_idx += 1
-            
-            # Constraint: Return at least one Chunk per Document.
-            # If no paragraphs were found or all were empty/whitespace,
-            # create one placeholder chunk for the document.
-            if not current_doc_chunks:
-                # This chunk will have empty text, which the BM25 retriever will handle
-                # (likely resulting in no indexed terms from this specific chunk).
-                chunk = Chunk(
-                    doc_id=doc_id,
-                    chunk_id=f"{doc_id}_0", # Still needs a unique ID, '0' is safe if no other chunks were made
-                    text="", # Empty text for documents with no substantive content
-                    metadata=doc.metadata
-                )
-                all_chunks.append(chunk)
-            else:
-                # Add all valid chunks from the current document to the global list
-                all_chunks.extend(current_doc_chunks)
-        
-        return all_chunks
+            # Try to retrieve title from metadata if available
+            title = doc.metadata.get("title", "").strip()
+            text = doc.text.strip() if doc.text else ""
 
+            # Handle edge case for empty text
+            if not text:
+                all_chunks.append(Chunk(
+                    doc_id=doc_id,
+                    chunk_id=f"{doc_id}_0",
+                    text=title if title else "empty"
+                ))
+                continue
+
+            # Basic whitespace normalization
+            words = text.split()
+            
+            # Constants for chunking
+            # "Tip of the tongue" queries usually target the definition/summary of an entity.
+            # BM25 benefits from relatively short, dense chunks to avoid score dilution.
+            chunk_size = 400
+            overlap = 100
+            max_chunks_per_doc = 5  # Limits noise from bibliography/references in long articles
+
+            for i in range(max_chunks_per_doc):
+                start_idx = i * (chunk_size - overlap)
+                
+                # Stop if we've consumed the text
+                if start_idx >= len(words) and i > 0:
+                    break
+                
+                end_idx = start_idx + chunk_size
+                chunk_words = words[start_idx:end_idx]
+                
+                if not chunk_words:
+                    break
+                
+                body = " ".join(chunk_words)
+                
+                # Title Propagation: Prepend the title to every chunk.
+                # In BM25, frequency matters. Repeating the title twice ensures 
+                # the subject entity has a high term weight in every chunk.
+                if title:
+                    # Ensure the entity name is strongly associated with the description
+                    chunk_text = f"{title}. {title}. {body}"
+                else:
+                    chunk_text = body
+
+                all_chunks.append(Chunk(
+                    doc_id=doc_id,
+                    chunk_id=f"{doc_id}_{i}",
+                    text=chunk_text
+                ))
+
+                # Check if we finished the document
+                if end_idx >= len(words):
+                    break
+
+        return all_chunks
 ```

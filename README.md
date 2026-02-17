@@ -7,6 +7,7 @@
 - There should be detailed logs and feedback for LLMs to understand how their code did.
 	- Maybe a test on a small example corpus and then can test on building the whole corpus as well
 - There should be some way of accessing memory learned from previous experiments and code generation steps. State management over time would be important for real world applications where the index is changing many times over a long period of time
+- **Maybe there should be a separate agent for analyzing eval results to pass on to the coding agent as feedback and insights to learn from**
 
 ## Proposal 1 - Use existing coding harnesses
 - Can use API key with gemini CLI, Codex, and most likely with claude code

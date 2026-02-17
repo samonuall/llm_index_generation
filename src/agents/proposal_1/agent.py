@@ -26,7 +26,7 @@ if str(_SRC_AGENTS_DIR) not in sys.path:
 
 from agent_runner import AgentRunner  # type: ignore
 
-_MODEL = "gemini-3-flash"
+_MODEL = "gemini-3-flash-preview"
 
 
 class Proposal1Agent(AgentRunner):
@@ -47,6 +47,36 @@ class Proposal1Agent(AgentRunner):
             return self._system_instruction
 
         k = eval_results["top_k"]
+
+        query_results = eval_results.get("query_results", [])
+        misses = [r for r in query_results if not r["hit"]]
+        hits = [r for r in query_results if r["hit"]]
+
+        # Format missed queries
+        missed_lines = []
+        for r in misses:
+            missed_lines.append(
+                f"  - [{r['query_id']}] \"{r['query_text']}\"\n"
+                f"    Expected doc(s): {r['relevant_doc_ids']}\n"
+                f"    Retrieved docs : {r['retrieved_doc_ids']}"
+            )
+
+        # Format hits, sorted by rank (worst first)
+        hit_lines = []
+        for r in sorted(hits, key=lambda x: x["rank"] or 0, reverse=True):
+            hit_lines.append(
+                f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}  \"{r['query_text']}\""
+            )
+
+        missed_section = (
+            f"### Missed queries ({len(misses)} / {len(query_results)}):\n"
+            + ("\n".join(missed_lines) if missed_lines else "  (none)")
+        )
+        hit_section = (
+            f"### Retrieved queries ({len(hits)} / {len(query_results)}) — sorted worst rank first:\n"
+            + ("\n".join(hit_lines) if hit_lines else "  (none)")
+        )
+
         return (
             f"{self._system_instruction}\n\n"
             f"## Current implementation\n```python\n{current_code}\n```\n\n"
@@ -54,6 +84,9 @@ class Proposal1Agent(AgentRunner):
             f"- Recall@{k}: {eval_results['recall_at_k']:.4f}\n"
             f"- MRR: {eval_results['mrr']:.4f}\n"
             f"- Chunks indexed: {eval_results['n_chunks']}\n\n"
+            f"## Per-query breakdown\n"
+            f"{missed_section}\n\n"
+            f"{hit_section}\n\n"
             "Improve the implementation to increase Recall and MRR."
         )
 
