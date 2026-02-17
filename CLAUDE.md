@@ -9,25 +9,33 @@ improve retrieval quality. The agent gets feedback from a static evaluation harn
 
 ```
 llm_index_generation/
-├── data/                          # Pre-fetched corpus subset (NEVER modified by agents)
-│   ├── documents.jsonl            # Documents from CRUMB tip-of-the-tongue
-│   └── queries.jsonl              # Matching EvalQuery objects
-├── src/
-│   ├── evaluation/                # Static harness – DO NOT MODIFY
-│   │   ├── schema.py              # Shared data classes (Document, Chunk, EvalQuery)
-│   │   ├── base.py                # BasePreprocessor ABC – agents subclass this
-│   │   └── scripts/
-│   │       ├── get_data.py        # One-time data prep: downloads & saves to data/
-│   │       ├── build_index.py     # Builds a BM25 index (bm25s) from Chunks
-│   │       └── test_preprocessing.py  # Runs eval queries, returns Recall@k + MRR
-│   └── agents/                    # One sub-folder per agent / experiment
-│       ├── baseline/
-│       │   └── preprocess.py      # Reference passthrough agent
-│       └── <agent_name>/
-│           ├── preprocess.py      # Must define Preprocessor(BasePreprocessor)
-│           └── ...                # Agent can create any other files here freely
+├── main.py                            # CLI entry point: runs agent loops
+├── proposals.md                       # Design proposals and tradeoffs
 ├── pyproject.toml
-└── README.md
+├── data/                              # Pre-fetched corpus subset (NEVER modified by agents)
+│   ├── documents.jsonl                # Documents from CRUMB tip-of-the-tongue
+│   └── queries.jsonl                  # Matching EvalQuery objects
+└── src/
+    ├── evaluation/                    # Static harness – DO NOT MODIFY
+    │   ├── schema.py                  # Shared data classes (Document, Chunk, EvalQuery)
+    │   ├── base.py                    # BasePreprocessor ABC – agents subclass this
+    │   └── scripts/
+    │       ├── get_data.py            # One-time data prep: downloads & saves to data/
+    │       ├── build_index.py         # Builds a BM25 index (bm25s) from Chunks
+    │       └── test_preprocessing.py  # Runs eval queries, returns Recall@k + MRR
+    └── agents/                        # One sub-folder per agent / experiment
+        ├── CONTEXT.md                 # Dataset and interface docs for agent prompts
+        ├── agent_runner.py            # Abstract base class for iterative LLM agents
+        ├── baseline/
+        │   └── preprocess.py          # Reference passthrough agent
+        ├── gemini_sdk/
+        │   ├── preprocess.py          # Must define Preprocessor(BasePreprocessor)
+        │   ├── agent.py               # Gemini-backed iterative agent
+        │   └── context/
+        │       └── SYSTEM_INSTRUCTION.md  # System prompt template
+        └── <agent_name>/
+            ├── preprocess.py          # Must define Preprocessor(BasePreprocessor)
+            └── ...                    # Agent can create any other files here freely
 ```
 
 ## Standard Data Classes (`src/evaluation/schema.py`)
@@ -89,6 +97,35 @@ class Preprocessor(BasePreprocessor):
         """
 ```
 
+## AgentRunner Base Class (`src/agents/agent_runner.py`)
+
+`AgentRunner` is an abstract base class for iterative LLM-driven agents. Subclass it and implement
+`build_prompt()` and `call_llm()`, then call `run(n_loops)`:
+
+```python
+from agent_runner import AgentRunner
+
+class MyAgent(AgentRunner):
+    agent_name = "my_agent"   # must match the folder under src/agents/
+
+    def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
+        ...  # construct a prompt from current code + eval feedback
+
+    def call_llm(self, prompt: str, iteration: int) -> None:
+        ...  # call the LLM, extract code, write it to preprocess.py
+```
+
+`AgentRunner.run_eval()` dynamically reloads `preprocess.py` and runs the static harness each
+iteration, so code changes take effect without restarting.
+
+## CLI Entry Point (`main.py`)
+
+```bash
+uv run python main.py --agent gemini_sdk --loops 5
+```
+
+Agents are registered in `main.py`. Add a new `elif` branch to support a new agent.
+
 ## Evaluation Pipeline
 
 The retriever (BM25 via `bm25s`) and eval scripts are **static and cannot be changed by agents**.
@@ -110,7 +147,8 @@ Programmatic use (e.g. from inside an agent folder):
 ```python
 from test_preprocessing import evaluate
 results = evaluate(Preprocessor(), top_k=10)
-# returns dict: { agent, recall_at_k, mrr, top_k, n_queries, n_chunks }
+# returns dict: { agent, recall_at_k, mrr, top_k, n_queries, n_chunks, query_results }
+# query_results: list of per-query dicts with hit, rank, reciprocal_rank, retrieved_doc_ids
 ```
 
 ## Data Preparation (`get_data.py`)
@@ -139,3 +177,4 @@ Agents never call or import from `get_data.py`.
 - `data/` is generated; add it to `.gitignore` or commit explicitly after running `get_data.py`.
 - The harness validates that `Preprocessor` is named exactly `Preprocessor` and inherits from
   `BasePreprocessor`. Agents that fail this check will not be evaluated.
+- Requires a `.env` file at the project root with provider API keys (e.g. `GOOGLE_API_KEY`).

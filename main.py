@@ -2,7 +2,7 @@
 main.py – CLI entry point for LLM-driven preprocessing agents.
 
 Usage:
-    uv run python main.py --agent proposal_1 --loops 5
+    uv run python main.py --agent gemini_sdk --loops 5
 """
 
 import argparse
@@ -14,9 +14,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--agent",
-        default="proposal_1",
-        choices=["proposal_1"],
-        help="Which agent to run (default: proposal_1)",
+        default="gemini_sdk",
+        choices=["gemini_sdk"],
+        help="Which agent to run (default: gemini_sdk)",
     )
     parser.add_argument(
         "--loops",
@@ -24,11 +24,17 @@ def main() -> None:
         default=3,
         help="Number of eval+improve loops (default: 3)",
     )
+    parser.add_argument(
+        "--no-query-text",
+        action="store_true",
+        default=False,
+        help="Omit raw query text from the prompt (use when Gemini safety filters block content)",
+    )
     args = parser.parse_args()
 
-    if args.agent == "proposal_1":
-        from src.agents.proposal_1.agent import Proposal1Agent
-        agent = Proposal1Agent()
+    if args.agent == "gemini_sdk":
+        from src.agents.gemini_sdk.agent import GeminiSdkAgent
+        agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 

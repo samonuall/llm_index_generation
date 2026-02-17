@@ -1,5 +1,5 @@
 """
-agent.py – Proposal 1: Gemini-backed iterative preprocessing agent.
+agent.py – Gemini SDK: Gemini-backed iterative preprocessing agent.
 
 Uses the google-genai Python SDK to iteratively improve preprocess.py based
 on eval feedback from the static BM25 harness.
@@ -29,15 +29,16 @@ from agent_runner import AgentRunner  # type: ignore
 _MODEL = "gemini-3-flash-preview"
 
 
-class Proposal1Agent(AgentRunner):
-    agent_name = "proposal_1"
+class GeminiSdkAgent(AgentRunner):
+    agent_name = "gemini_sdk"
 
-    def __init__(self) -> None:
+    def __init__(self, include_query_text: bool = True) -> None:
         context_dir = _AGENT_DIR / "context"
         dataset_info = (_SRC_AGENTS_DIR / "CONTEXT.md").read_text(encoding="utf-8")
         template = (context_dir / "SYSTEM_INSTRUCTION.md").read_text(encoding="utf-8")
         self._system_instruction = template.replace("{dataset_info}", dataset_info)
         self._client = genai.Client()
+        self._include_query_text = include_query_text
 
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
         preprocess_path = _AGENT_DIR / "preprocess.py"
@@ -55,18 +56,30 @@ class Proposal1Agent(AgentRunner):
         # Format missed queries
         missed_lines = []
         for r in misses:
-            missed_lines.append(
-                f"  - [{r['query_id']}] \"{r['query_text']}\"\n"
-                f"    Expected doc(s): {r['relevant_doc_ids']}\n"
-                f"    Retrieved docs : {r['retrieved_doc_ids']}"
-            )
+            if self._include_query_text:
+                missed_lines.append(
+                    f"  - [{r['query_id']}] \"{r['query_text']}\"\n"
+                    f"    Expected doc(s): {r['relevant_doc_ids']}\n"
+                    f"    Retrieved docs : {r['retrieved_doc_ids']}"
+                )
+            else:
+                missed_lines.append(
+                    f"  - [{r['query_id']}]"
+                    f"    Expected doc(s): {r['relevant_doc_ids']}\n"
+                    f"    Retrieved docs : {r['retrieved_doc_ids']}"
+                )
 
         # Format hits, sorted by rank (worst first)
         hit_lines = []
         for r in sorted(hits, key=lambda x: x["rank"] or 0, reverse=True):
-            hit_lines.append(
-                f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}  \"{r['query_text']}\""
-            )
+            if self._include_query_text:
+                hit_lines.append(
+                    f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}  \"{r['query_text']}\""
+                )
+            else:
+                hit_lines.append(
+                    f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}"
+                )
 
         missed_section = (
             f"### Missed queries ({len(misses)} / {len(query_results)}):\n"
@@ -98,19 +111,51 @@ class Proposal1Agent(AgentRunner):
         timestamp = datetime.datetime.now().isoformat(timespec="seconds")
         header = f"=== Iteration {iteration + 1} | {timestamp} ===\n\n"
 
-        print(f"[proposal_1] Calling Gemini (iteration {iteration + 1}) ...")
+        # Log the prompt
+        prompt_log_path = logs_dir / f"iteration_{iteration + 1}_prompt.log"
+        prompt_log_path.write_text(header + prompt, encoding="utf-8")
+
+        print(f"[gemini_sdk] Calling Gemini (iteration {iteration + 1}) ...")
 
         response = self._client.models.generate_content(
             model=_MODEL,
             contents=prompt,
         )
-        text = response.text or ""
+
+        # Collect response metadata for logging
+        finish_reason = None
+        safety_ratings = []
+        try:
+            if response.candidates:
+                finish_reason = response.candidates[0].finish_reason
+                safety_ratings = response.candidates[0].safety_ratings or []
+        except Exception:
+            pass
+
+        prompt_feedback = getattr(response, "prompt_feedback", None)
+
+        try:
+            text = response.text or ""
+        except Exception as exc:
+            text = ""
+            print(f"[gemini_sdk] response.text raised: {exc}")
 
         with log_path.open("w", encoding="utf-8") as log_file:
             log_file.write(header)
+            log_file.write(f"--- finish_reason: {finish_reason}\n")
+            if safety_ratings:
+                log_file.write(f"--- safety_ratings: {safety_ratings}\n")
+            if prompt_feedback:
+                log_file.write(f"--- prompt_feedback: {prompt_feedback}\n")
+            log_file.write("\n")
             log_file.write(text)
 
-        print(text)
+        if not text:
+            print(f"[gemini_sdk] Empty response from API. finish_reason={finish_reason}")
+            if prompt_feedback:
+                print(f"[gemini_sdk] prompt_feedback: {prompt_feedback}")
+        else:
+            print(text)
 
         # Extract the first ```python ... ``` block and write it to preprocess.py
         match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
@@ -118,8 +163,8 @@ class Proposal1Agent(AgentRunner):
             code = match.group(1).rstrip()
             preprocess_path = _AGENT_DIR / "preprocess.py"
             preprocess_path.write_text(code + "\n", encoding="utf-8")
-            print(f"[proposal_1] preprocess.py updated ({len(code.splitlines())} lines).")
+            print(f"[gemini_sdk] preprocess.py updated ({len(code.splitlines())} lines).")
         else:
-            print("[proposal_1] Warning: no ```python``` block found in response — preprocess.py unchanged.")
+            print("[gemini_sdk] Warning: no ```python``` block found in response — preprocess.py unchanged.")
 
-        print(f"[proposal_1] Iteration {iteration + 1} complete. Log: {log_path}")
+        print(f"[gemini_sdk] Iteration {iteration + 1} complete. Log: {log_path}")

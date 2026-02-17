@@ -1,57 +1,136 @@
-# Building a coding agent for index generation
+# LLM Index Generation
 
-## Structure of the generated code
+Research project testing LLM-driven approaches for iteratively writing preprocessing code to improve BM25 retrieval quality. An agent receives feedback from a static evaluation harness and iterates on its own preprocessing implementation.
 
-- We will need the test code to be hand-coded and not touched by the coding agent to avoid reward hacking or manipulation of tests
-	- This means that coding agents will need to conform to some sort of structure in order for their generated code to work with a static testing framework
-- There should be detailed logs and feedback for LLMs to understand how their code did.
-	- Maybe a test on a small example corpus and then can test on building the whole corpus as well
-- There should be some way of accessing memory learned from previous experiments and code generation steps. State management over time would be important for real world applications where the index is changing many times over a long period of time
-- **Maybe there should be a separate agent for analyzing eval results to pass on to the coding agent as feedback and insights to learn from**
+## Overview
 
-## Proposal 1 - Use existing coding harnesses
-- Can use API key with gemini CLI, Codex, and most likely with claude code
-- We could run these existing coding harnesses within a folder which builds our preprocessing and index scripts.
-- The agent can then call a premade script for testing their code and iterate from there
-- We can control its token usage and effort with prompting but this may be hardish
-- Can still evolve prompts in some way by putting prompts in a folder and testing with these coding harnesses
-### Tradeoffs
-- Pros
-	- Allows us to continue with experimentation and higher level systems thining for the project without having to think about the implementation of how the coding agent will actually create code
-	- Coding harnesses have been built over months by professionals, they will be very good and better than what we could make most likely
-- Cons
-	- Less customization, we may run into some headaches when we want to change the coding agents performance beyond changing the prompts
-	- Not sure how the research community feels about using this kind of thing for open research. They might prefer using custom tools or at least open source frameworks
+The core idea: an LLM agent only controls a single `preprocess()` function. Everything else — the retriever, tokenizer, evaluation metrics, and dataset — is fixed. The agent's goal is to transform raw Wikipedia documents into chunks that maximize Recall@k and MRR against a set of "tip of the tongue" queries.
 
-## Proposal 2 - Create our own coding harness
-- From scratch we can design our own coding harness
-- This would involve a few parts
-	- Designing a context management system - how to represent the repo to the agent? How to store chat history as you go along?
-	- How to give it access to terminal and coding tools?
-	- Context management to reduce context usage
-- Allows for more control and adjustments as we iterate
-- Would involve using open source libraries/frameworks like
-	- MCP servers
-	- Agent2Agent protocol
-	- Direct API calls to LLM providers
+```
+Raw Documents → preprocess() → Chunks → BM25 Index → Eval Queries → Recall@k + MRR
+                    ↑ (agent controls only this)
+```
 
-### Tradeoffs
-- Pros
-	- Maximum customization
-	- If we think the coding loop of the index generation will not be too complex, I think this is best probably
-- Cons
-	- Added complexity, will take more time
-	-  If we are going to have complex engineering cycles where the coding agent can create many files and experiment very widely, we may want to go with prewritten coding harnesses instead
+## Repository Structure
 
+```
+llm_index_generation/
+├── main.py                            # CLI entry point for running agents
+├── proposals.md                       # Design proposals and tradeoffs
+├── pyproject.toml
+├── data/                              # Pre-fetched corpus subset (generated, not committed)
+│   ├── documents.jsonl                # Wikipedia documents
+│   └── queries.jsonl                  # Eval queries (EvalQuery objects)
+└── src/
+    ├── evaluation/                    # Static harness – DO NOT MODIFY
+    │   ├── schema.py                  # Data classes: Document, Chunk, EvalQuery
+    │   ├── base.py                    # BasePreprocessor ABC
+    │   └── scripts/
+    │       ├── get_data.py            # One-time data download from HuggingFace
+    │       ├── build_index.py         # BM25 index builder (bm25s + English stemmer)
+    │       └── test_preprocessing.py  # Eval harness: Recall@k + MRR
+    └── agents/
+        ├── CONTEXT.md                 # Dataset and interface docs for agent prompts
+        ├── agent_runner.py            # Abstract base class for iterative LLM agents
+        ├── baseline/
+        │   └── preprocess.py          # Passthrough reference implementation
+        └── gemini_sdk/
+            ├── preprocess.py          # Wikipedia section-aware chunker (agent-generated)
+            ├── agent.py               # Gemini-backed iterative agent
+            └── context/
+                └── SYSTEM_INSTRUCTION.md  # System prompt template
+```
 
-## Proposal 3 - Use open source coding harnesses
-- Kind of a middle ground between 1 and 2. Allows for more customization than proposal 1, but also depending on a lot of prewritten patterns and structure
-	- [Cline](https://cline.bot/)
-	- [OpenCode](https://opencode.ai/)
-	- [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) (Claude agent SDK is not open source but is a lot more customizable than the gemini CLI and Codex coding harnesses)
+## Setup
 
-### Tradeoffs
-- Pros
-	- Potentially good balance between proposals 1 and 2
-- Cons
-	- Potentially steep learning curve
+```bash
+# Install dependencies
+uv sync
+
+# Download the dataset (run once)
+uv run python src/evaluation/scripts/get_data.py            # 50 queries (default)
+uv run python src/evaluation/scripts/get_data.py --n-queries 100
+```
+
+Requires a `.env` file with `GOOGLE_API_KEY` for the Gemini-backed agents.
+
+## Running Evaluation
+
+Evaluate any agent preprocessor against the static BM25 harness:
+
+```bash
+uv run python src/evaluation/scripts/test_preprocessing.py --agent baseline
+uv run python src/evaluation/scripts/test_preprocessing.py --agent gemini_sdk
+uv run python src/evaluation/scripts/test_preprocessing.py --agent <agent_name> --top-k 20
+```
+
+## Running an Agent
+
+Run an iterative LLM agent (eval → improve loop):
+
+```bash
+uv run python main.py --agent gemini_sdk --loops 5
+```
+
+The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats.
+
+## Dataset
+
+- **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb) — `tip_of_the_tongue` split
+- **Corpus**: Full Wikipedia articles (streamed from HuggingFace, not stored)
+- **Queries**: "Tip of the tongue" natural language descriptions of Wikipedia entities
+- **Scope**: 50 eval queries, each with one or more ground-truth `relevant_doc_ids`
+
+## Agent Interface
+
+Each agent lives in `src/agents/<name>/` and must define a `Preprocessor` class in `preprocess.py`:
+
+```python
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "evaluation"))
+
+from typing import List
+from schema import Document, Chunk
+from base import BasePreprocessor
+
+class Preprocessor(BasePreprocessor):
+    name = "my_agent"
+    description = "One-line summary"
+
+    def preprocess(self, docs: List[Document]) -> List[Chunk]:
+        # Return at least one Chunk per Document.
+        # chunk.doc_id must match doc.doc_id.
+        # chunk_id must be globally unique.
+        ...
+```
+
+Agents can create any additional files within their own folder.
+
+## Evaluation Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Recall@k | Fraction of queries where a relevant doc appears in the top-k results |
+| MRR | Mean Reciprocal Rank — average of 1/rank for the first relevant result |
+
+The retriever is BM25 (`bm25s`) with an English Snowball stemmer. Agents cannot modify the retriever.
+
+## Agents
+
+| Agent | Strategy | Notes |
+|-------|----------|-------|
+| `baseline` | One chunk per document, raw text | Performance floor |
+| `gemini_sdk` | Section-aware Wikipedia chunking with title propagation | Gemini-generated, iteratively improved |
+
+## Adding a New Agent
+
+1. Create `src/agents/<name>/preprocess.py` with a `Preprocessor` class (see interface above)
+2. Optionally add an `agent.py` subclassing `AgentRunner` for the iterative loop
+3. Evaluate: `uv run python src/evaluation/scripts/test_preprocessing.py --agent <name>`
+
+## Conventions
+
+- Use `uv add <package>` to add dependencies, never `pip install`
+- Never modify anything in `src/evaluation/` — it is the static ground truth
+- Agent code stays entirely within `src/agents/<name>/`
+- `data/` is generated; run `get_data.py` to populate it
