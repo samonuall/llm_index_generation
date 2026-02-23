@@ -10,8 +10,8 @@ Output files (overwritten on each run):
   data/queries.jsonl    –  one EvalQuery per line
 
 Usage:
-  uv run python src/scripts/get_data.py
-  uv run python src/scripts/get_data.py --n-queries 100
+  uv run python -m src.evaluation.scripts.get_data
+  uv run python -m src.evaluation.scripts.get_data --n-queries 100
 """
 
 from __future__ import annotations
@@ -20,8 +20,12 @@ import argparse
 import ast
 import dataclasses
 import json
+import sys
 from pathlib import Path
 from typing import Any, List, Set, Tuple
+
+# Make src/evaluation/ importable (for schema)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from datasets import load_dataset  # type: ignore
 
@@ -33,7 +37,7 @@ from schema import Document, EvalQuery
 
 HF_REPO   = "jfkback/crumb"
 HF_SPLIT  = "tip_of_the_tongue"
-DATA_DIR  = Path(__file__).parents[2] / "data"
+DATA_DIR  = Path(__file__).parents[3] / "data"
 N_QUERIES = 100
 
 

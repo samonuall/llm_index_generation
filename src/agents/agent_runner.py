@@ -81,7 +81,7 @@ class AgentRunner(ABC):
         spec.loader.exec_module(module)  # type: ignore[union-attr]
 
         preprocessor = module.Preprocessor()
-        return evaluate(preprocessor, top_k=10)
+        return evaluate(preprocessor, top_k=5)
 
     @abstractmethod
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str: ...
