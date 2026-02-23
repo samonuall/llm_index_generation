@@ -14,7 +14,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--agent",
-        default="gemini_sdk",
+        default=None,
         choices=["gemini_sdk", "lite_llm_agent"],
         help="Which agent to run (default: gemini_sdk)",
     )
@@ -33,10 +33,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.agent == "gemini_sdk":
-        from src.agents.gemini_sdk.agent import GeminiSdkAgent
+        from src.agents import GeminiSdkAgent
         agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
     elif args.agent == "lite_llm_agent":
-        from src.agents.lite_llm_agent.agent import LiteLLMAgent
+        from src.agents import LiteLLMAgent
         agent = LiteLLMAgent(include_query_text=not args.no_query_text)
     else:
         raise ValueError(f"Unknown agent: {args.agent}")

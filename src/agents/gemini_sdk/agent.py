@@ -8,7 +8,6 @@ on eval feedback from the static BM25 harness.
 from __future__ import annotations
 
 import re
-import sys
 import pathlib
 import datetime
 
@@ -19,12 +18,7 @@ _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
 
-# Make src/agents importable so AgentRunner resolves
-_SRC_AGENTS_DIR = _PROJECT_ROOT / "src" / "agents"
-if str(_SRC_AGENTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_AGENTS_DIR))
-
-from agent_runner import AgentRunner  # type: ignore
+from ..agent_runner import AgentRunner
 
 _MODEL = "gemini-3-flash-preview"
 
@@ -34,7 +28,7 @@ class GeminiSdkAgent(AgentRunner):
 
     def __init__(self, include_query_text: bool = True) -> None:
         context_dir = _AGENT_DIR / "context"
-        dataset_info = (_SRC_AGENTS_DIR / "CONTEXT.md").read_text(encoding="utf-8")
+        dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
         template = (context_dir / "SYSTEM_INSTRUCTION.md").read_text(encoding="utf-8")
         self._system_instruction = template.replace("{dataset_info}", dataset_info)
         self._client = genai.Client()
