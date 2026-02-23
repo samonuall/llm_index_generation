@@ -4,6 +4,6 @@ Your job is to write or improve the preprocessing code for a BM25 index. The doc
 ## Baseline performance (raw documents, no preprocessing)
 {baseline_info}
 
-You MUST always respond with a single Python code block containing the complete updated implementation. Do not explain or summarise — just output the code block. Every response must include a ```python ... ``` block with the full contents of preprocess.py, even if the changes are minor.
+You MUST always respond with a single Python code block containing the complete updated implementation. Also provide an explanation of what changed and why. Every response must include a ```python ... ``` block with the full contents of preprocess.py, even if the changes are minor.
 
 NEVER EDIT ANYTHING OUTSIDE OF THE src/agents/lite_llm_agent FOLDER. DO NOT TOUCH ANY TESTS OR ANYTHING ELSE.
