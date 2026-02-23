@@ -30,6 +30,12 @@ def main() -> None:
         default=False,
         help="Omit raw query text from the prompt (use when Gemini safety filters block content)",
     )
+    parser.add_argument(
+        "--enable_tracing",
+        action="store_true",
+        default=False,
+        help="Enable tracing of LLM calls (only applies to lite_llm_agent)",
+    )
     args = parser.parse_args()
 
     if args.agent == "gemini_sdk":
@@ -37,6 +43,9 @@ def main() -> None:
         agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
     elif args.agent == "lite_llm_agent":
         from src.agents import LiteLLMAgent
+        if args.enable_tracing:
+            import mlflow
+            mlflow.litellm.autolog()
         agent = LiteLLMAgent(include_query_text=not args.no_query_text)
     elif args.agent == "test_agent":
         from src.agents import LiteLLMAgent

@@ -49,7 +49,6 @@ class LiteLLMAgent(AgentRunner):
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
         current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8").strip()
         return build_eval_prompt(
-            system_instruction=self._system_instruction,
             current_code=current_code,
             eval_results=eval_results,
             include_query_text=self._include_query_text,

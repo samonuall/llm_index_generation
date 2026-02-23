@@ -6,7 +6,6 @@ from __future__ import annotations
 
 
 def build_eval_prompt(
-    system_instruction: str,
     current_code: str,
     eval_results: dict | None,
     include_query_text: bool = True,
@@ -17,8 +16,6 @@ def build_eval_prompt(
 
     Returns the system instruction alone when there is no code or eval results yet.
     """
-    if not current_code or eval_results is None:
-        return system_instruction
 
     k = eval_results["top_k"]
 
@@ -50,7 +47,6 @@ def build_eval_prompt(
         per_query_section = f"\n## Per-query breakdown\n{missed_section}\n\n{hit_section}\n"
 
     return (
-        f"{system_instruction}\n\n"
         f"## Current implementation\n```python\n{current_code}\n```\n\n"
         f"## Last eval results (top-{k})\n"
         f"- Recall@{k}: {eval_results['recall_at_k']:.4f}\n"
