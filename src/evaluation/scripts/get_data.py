@@ -22,7 +22,7 @@ import dataclasses
 import json
 import sys
 from pathlib import Path
-from typing import Any, List, Set, Tuple
+from typing import Any
 
 # Make src/evaluation/ importable (for schema)
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -46,7 +46,7 @@ N_QUERIES = 135
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_qrels(raw: Any) -> List[str]:
+def _parse_qrels(raw: Any) -> list[str]:
     """Return doc IDs with positive relevance from a full_document_qrels value."""
     if isinstance(raw, str):
         qrels = ast.literal_eval(raw)
@@ -57,90 +57,68 @@ def _parse_qrels(raw: Any) -> List[str]:
     return [str(q["id"]) for q in qrels if q.get("label", 0) > 0]
 
 
-def _fetch(n_queries: int) -> Tuple[List[Document], List["EvalQuery"]]:
-    # --- Step 1: stream eval queries, collect target doc IDs ----------------
+def _stream_queries(n_queries: int) -> None:
+    """Stream evaluation queries directly to disk."""
     print(f"Streaming evaluation queries from {HF_REPO} (want {n_queries}) ...")
     q_stream = load_dataset(
         HF_REPO, "evaluation_queries", split=HF_SPLIT, streaming=True
     )
 
-    queries: List[EvalQuery] = []
-    target_doc_ids: Set[str] = set()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    q_path = DATA_DIR / "queries.jsonl"
+    n_written = 0
     q_scanned = 0
 
-    with tqdm(total=n_queries, desc="Queries", unit="query") as pbar:
+    with q_path.open("w", encoding="utf-8") as f, \
+         tqdm(total=n_queries, desc="Queries", unit="query") as pbar:
         for row in q_stream:
             q_scanned += 1
             rel_ids = _parse_qrels(row.get("full_document_qrels"))
             if not rel_ids:
-                pbar.set_postfix(scanned=q_scanned, no_qrels=q_scanned - len(queries))
+                pbar.set_postfix(scanned=q_scanned, no_qrels=q_scanned - n_written)
                 continue
-            queries.append(
-                EvalQuery(
-                    query_id=str(row["query_id"]),
-                    query_text=row["query_content"],
-                    relevant_doc_ids=rel_ids,
-                )
+            query = EvalQuery(
+                query_id=str(row["query_id"]),
+                query_text=row["query_content"],
+                relevant_doc_ids=rel_ids,
             )
-            target_doc_ids.update(rel_ids)
+            f.write(json.dumps(dataclasses.asdict(query)) + "\n")
+            n_written += 1
             pbar.update(1)
-            pbar.set_postfix(scanned=q_scanned, target_docs=len(target_doc_ids))
-            if len(queries) >= n_queries:
+            pbar.set_postfix(scanned=q_scanned)
+            if n_written >= n_queries:
                 break
 
-    print(f"  {len(queries)} queries referencing {len(target_doc_ids)} unique docs "
-          f"(scanned {q_scanned} rows).")
+    print(f"  {n_written} queries saved -> {q_path} (scanned {q_scanned} rows).")
 
-    # --- Step 2: stream full-doc corpus, fetch only the target docs ----------
-    print("Streaming full-document corpus to retrieve referenced docs ...")
+
+def _stream_docs(max_docs: int | None = None) -> None:
+    """Stream the full document corpus directly to disk."""
+    cap_msg = f" (capped at {max_docs})" if max_docs else ""
+    print(f"Streaming full-document corpus{cap_msg} ...")
     doc_stream = load_dataset(
         HF_REPO, "full_document_corpus", split=HF_SPLIT, streaming=True
     )
 
-    docs: List[Document] = []
-    remaining = set(target_doc_ids)
-    n_target = len(target_doc_ids)
-    d_scanned = 0
-
-    with tqdm(total=n_target, desc="Documents", unit="doc") as pbar:
-        for row in doc_stream:
-            d_scanned += 1
-            doc_id = str(row["document_id"])
-            if doc_id in remaining:
-                docs.append(
-                    Document(
-                        doc_id=doc_id,
-                        text=row["document_content"],
-                        metadata={"parent_id": row.get("parent_id")},
-                    )
-                )
-                remaining.discard(doc_id)
-                pbar.update(1)
-                pbar.set_postfix(scanned=d_scanned, remaining=len(remaining))
-                if not remaining:
-                    break
-
-    if remaining:
-        print(f"  Warning: {len(remaining)} doc IDs not found in corpus: {remaining}")
-
-    print(f"  {len(docs)} documents retrieved (scanned {d_scanned} corpus rows).")
-    return docs, queries
-
-
-def _save(docs: List[Document], queries: List[EvalQuery]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     doc_path = DATA_DIR / "documents.jsonl"
-    with doc_path.open("w", encoding="utf-8") as f:
-        for doc in docs:
-            f.write(json.dumps(dataclasses.asdict(doc)) + "\n")
-    print(f"Saved {len(docs)} documents -> {doc_path}")
+    n_written = 0
 
-    q_path = DATA_DIR / "queries.jsonl"
-    with q_path.open("w", encoding="utf-8") as f:
-        for q in queries:
-            f.write(json.dumps(dataclasses.asdict(q)) + "\n")
-    print(f"Saved {len(queries)} queries  -> {q_path}")
+    with doc_path.open("w", encoding="utf-8") as f, \
+         tqdm(desc="Documents", unit="doc") as pbar:
+        for row in doc_stream:
+            doc = Document(
+                doc_id=str(row["document_id"]),
+                text=row["document_content"],
+                metadata={"parent_id": row.get("parent_id")},
+            )
+            f.write(json.dumps(dataclasses.asdict(doc)) + "\n")
+            n_written += 1
+            pbar.update(1)
+            if max_docs and n_written >= max_docs:
+                break
+
+    print(f"  {n_written} documents saved -> {doc_path}.")
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +128,32 @@ def _save(docs: List[Document], queries: List[EvalQuery]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download CRUMB data to data/")
     parser.add_argument("--n-queries", type=int, default=N_QUERIES)
+    parser.add_argument(
+        "--max-docs",
+        type=int,
+        default=None,
+        help="Cap the number of corpus documents saved (default: all)",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--queries-only",
+        action="store_true",
+        help="Download and save only queries (skip documents)",
+    )
+    mode.add_argument(
+        "--docs-only",
+        action="store_true",
+        help="Download and save only documents (skip queries)",
+    )
     args = parser.parse_args()
 
-    docs, queries = _fetch(args.n_queries)
-    _save(docs, queries)
+    if args.queries_only:
+        _stream_queries(args.n_queries)
+    elif args.docs_only:
+        _stream_docs(max_docs=args.max_docs)
+    else:
+        _stream_queries(args.n_queries)
+        _stream_docs(max_docs=args.max_docs)
     print("Done.")
 
 
