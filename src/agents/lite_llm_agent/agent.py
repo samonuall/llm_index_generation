@@ -33,7 +33,7 @@ def _load_config() -> dict:
 class LiteLLMAgent(AgentRunner):
     agent_name = "lite_llm_agent"
 
-    def __init__(self, include_query_text: bool = True) -> None:
+    def __init__(self, include_query_text: bool = True, test_mode: bool = False) -> None:
         config = _load_config()
         self._model: str = config["model"]
         self._temperature: float = float(config.get("temperature", 1.0))
@@ -44,6 +44,7 @@ class LiteLLMAgent(AgentRunner):
         template = (context_dir / "SYSTEM_INSTRUCTION.md").read_text(encoding="utf-8")
         self._system_instruction = template.replace("{dataset_info}", dataset_info)
         self._include_query_text = include_query_text
+        self._test_mode = test_mode
 
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
         current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8").strip()
@@ -54,6 +55,31 @@ class LiteLLMAgent(AgentRunner):
             include_query_text=self._include_query_text,
         )
 
+    def _completion(self, prompt: str):
+        if self._test_mode:
+            return completion(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._system_instruction},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=self._temperature,
+                api_key=self._api_key,
+                api_base="https://thekeymaker.umass.edu/",
+                mock_response="---This is a test response.---"
+            )
+        else:
+            return completion(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": self._system_instruction},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=self._temperature,
+                api_key=self._api_key,
+                api_base="https://thekeymaker.umass.edu/"
+            )
+    
     def call_llm(self, prompt: str, iteration: int) -> None:
         logs_dir = _AGENT_DIR / "logs"
         logs_dir.mkdir(exist_ok=True)
@@ -68,16 +94,7 @@ class LiteLLMAgent(AgentRunner):
 
         print(f"[lite_llm_agent] Calling {self._model} (iteration {iteration + 1}) ...")
 
-        response = completion(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": self._system_instruction},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=self._temperature,
-            api_key=self._api_key,
-            api_base="https://thekeymaker.umass.edu/"
-        )
+        response = self._completion(prompt)
 
         try:
             text: str = response.choices[0].message.content or ""
