@@ -4,18 +4,12 @@ test_preprocessing.py – Static evaluation harness. DO NOT MODIFY.
 CLI usage:
     uv run python src/evaluation/scripts/test_preprocessing.py --agent <name>
     uv run python src/evaluation/scripts/test_preprocessing.py --agent <name> --top-k 20
-
-Programmatic usage (from an agent's own test runner):
-    import sys, pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "src" / "evaluation" / "scripts"))
-    from test_preprocessing import evaluate
-    from my_preprocessor import Preprocessor
-    results = evaluate(Preprocessor(), top_k=10)
 """
 
 from __future__ import annotations
 
 import sys
+import math
 import pathlib
 import json
 import argparse
@@ -64,11 +58,11 @@ def _load_queries() -> List[EvalQuery]:
 # Evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
+def evaluate(preprocessor: BasePreprocessor, top_k: int = 100, ndcg_k: int = 10) -> dict:
     """
     Run the full eval pipeline for a given preprocessor.
 
-    Returns a dict with keys: recall_at_k, mrr, top_k, n_queries, n_chunks.
+    Returns a dict with keys: recall_at_k, ndcg, ndcg_k, top_k, n_queries, n_chunks.
     """
     docs = _load_documents()
     queries = _load_queries()
@@ -87,7 +81,7 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
     index = BM25Index(chunks)
 
     recall_hits = 0
-    mrr_total = 0.0
+    ndcg_total = 0.0
     query_results = []
 
     for query in queries:
@@ -95,20 +89,27 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
         retrieved_doc_ids = [chunk.doc_id for chunk, _ in results]
         relevant = set(query.relevant_doc_ids)
 
-        # Recall@k
+        # Recall@top_k
         hit = any(doc_id in relevant for doc_id in retrieved_doc_ids)
         if hit:
             recall_hits += 1
 
-        # MRR: reciprocal rank of first relevant doc
-        reciprocal_rank = 0.0
+        # Rank of first relevant doc (for per-query breakdown)
         rank_of_first_hit = None
         for rank, doc_id in enumerate(retrieved_doc_ids, start=1):
             if doc_id in relevant:
-                reciprocal_rank = 1.0 / rank
                 rank_of_first_hit = rank
-                mrr_total += reciprocal_rank
                 break
+
+        # nDCG@ndcg_k
+        dcg = 0.0
+        for rank, doc_id in enumerate(retrieved_doc_ids[:ndcg_k], start=1):
+            if doc_id in relevant:
+                dcg += 1.0 / math.log2(rank + 1)
+        ideal_count = min(len(relevant), ndcg_k)
+        idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_count + 1))
+        ndcg_score = dcg / idcg if idcg > 0 else 0.0
+        ndcg_total += ndcg_score
 
         query_results.append({
             "query_id": query.query_id,
@@ -117,22 +118,23 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 10) -> dict:
             "retrieved_doc_ids": retrieved_doc_ids,
             "hit": hit,
             "rank": rank_of_first_hit,
-            "reciprocal_rank": reciprocal_rank,
+            "ndcg": ndcg_score,
         })
 
     n = len(queries)
     recall_at_k = recall_hits / n
-    mrr = mrr_total / n
+    ndcg = ndcg_total / n
 
     print(f"\nResults  ({n} queries, top-{top_k}):")
-    print(f"  Recall@{top_k:<3}: {recall_at_k:.4f}")
-    print(f"  MRR       : {mrr:.4f}")
+    print(f"  Recall@{top_k:<3} : {recall_at_k:.4f}")
+    print(f"  nDCG@{ndcg_k:<5} : {ndcg:.4f}")
     print(f"{'='*60}\n")
 
     return {
         "agent": label,
         "recall_at_k": recall_at_k,
-        "mrr": mrr,
+        "ndcg": ndcg,
+        "ndcg_k": ndcg_k,
         "top_k": top_k,
         "n_queries": n,
         "n_chunks": len(chunks),
@@ -153,7 +155,7 @@ def main() -> None:
         required=True,
         help="Agent folder name under agents/  (e.g. 'baseline')",
     )
-    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--top-k", type=int, default=100)
     args = parser.parse_args()
 
     module_path = f"agents.{args.agent}.preprocess"

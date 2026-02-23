@@ -20,6 +20,7 @@ import argparse
 import ast
 import dataclasses
 import json
+import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -57,8 +58,8 @@ def _parse_qrels(raw: Any) -> list[str]:
     return [str(q["id"]) for q in qrels if q.get("label", 0) > 0]
 
 
-def _stream_queries(n_queries: int) -> None:
-    """Stream evaluation queries directly to disk."""
+def _stream_queries(n_queries: int) -> set[str]:
+    """Stream evaluation queries directly to disk. Returns the union of all relevant doc IDs."""
     print(f"Streaming evaluation queries from {HF_REPO} (want {n_queries}) ...")
     q_stream = load_dataset(
         HF_REPO, "evaluation_queries", split=HF_SPLIT, streaming=True
@@ -68,6 +69,7 @@ def _stream_queries(n_queries: int) -> None:
     q_path = DATA_DIR / "queries.jsonl"
     n_written = 0
     q_scanned = 0
+    relevant_doc_ids: set[str] = set()
 
     with q_path.open("w", encoding="utf-8") as f, \
          tqdm(total=n_queries, desc="Queries", unit="query") as pbar:
@@ -83,6 +85,7 @@ def _stream_queries(n_queries: int) -> None:
                 relevant_doc_ids=rel_ids,
             )
             f.write(json.dumps(dataclasses.asdict(query)) + "\n")
+            relevant_doc_ids.update(rel_ids)
             n_written += 1
             pbar.update(1)
             pbar.set_postfix(scanned=q_scanned)
@@ -90,35 +93,108 @@ def _stream_queries(n_queries: int) -> None:
                 break
 
     print(f"  {n_written} queries saved -> {q_path} (scanned {q_scanned} rows).")
+    return relevant_doc_ids
 
 
-def _stream_docs(max_docs: int | None = None) -> None:
-    """Stream the full document corpus directly to disk."""
-    cap_msg = f" (capped at {max_docs})" if max_docs else ""
+def _load_relevant_doc_ids_from_disk() -> set[str]:
+    """Read the already-saved queries.jsonl and return the union of all relevant doc IDs."""
+    q_path = DATA_DIR / "queries.jsonl"
+    if not q_path.exists():
+        return set()
+    relevant: set[str] = set()
+    with q_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                obj = json.loads(line)
+                relevant.update(obj.get("relevant_doc_ids", []))
+    return relevant
+
+
+def _stream_docs(
+    relevant_doc_ids: set[str],
+    max_docs: int | None = None,
+) -> None:
+    """Stream documents, guaranteeing all relevant docs are saved.
+
+    If max_docs > len(relevant_doc_ids), the remainder is filled with a
+    uniformly random sample of non-relevant corpus documents (reservoir
+    sampling, single pass). If max_docs is None, all corpus documents are
+    saved (relevant ones first, then the rest).
+    """
+    n_relevant = len(relevant_doc_ids)
+    if max_docs is not None and max_docs <= n_relevant:
+        print(
+            f"  Note: max_docs={max_docs} <= {n_relevant} relevant docs; "
+            "saving relevant docs only."
+        )
+        max_docs = None  # collect all relevant, skip reservoir logic
+
+    n_extra_slots = None if max_docs is None else max_docs - n_relevant
+    cap_msg = (
+        f" ({n_relevant} relevant + up to {n_extra_slots} random extras)"
+        if n_extra_slots is not None
+        else ""
+    )
     print(f"Streaming full-document corpus{cap_msg} ...")
+
     doc_stream = load_dataset(
         HF_REPO, "full_document_corpus", split=HF_SPLIT, streaming=True
     )
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    doc_path = DATA_DIR / "documents.jsonl"
-    n_written = 0
+    relevant_docs: dict[str, Document] = {}
+    reservoir: list[Document] = []   # random sample of non-relevant docs
+    n_seen_extra = 0
 
-    with doc_path.open("w", encoding="utf-8") as f, \
-         tqdm(desc="Documents", unit="doc") as pbar:
+    with tqdm(desc="Documents", unit="doc") as pbar:
         for row in doc_stream:
             doc = Document(
                 doc_id=str(row["document_id"]),
                 text=row["document_content"],
                 metadata={"parent_id": row.get("parent_id")},
             )
-            f.write(json.dumps(dataclasses.asdict(doc)) + "\n")
-            n_written += 1
             pbar.update(1)
-            if max_docs and n_written >= max_docs:
-                break
+            if doc.doc_id in relevant_doc_ids:
+                relevant_docs[doc.doc_id] = doc
+            else:
+                if n_extra_slots is None:
+                    # no cap – keep everything
+                    reservoir.append(doc)
+                elif n_extra_slots > 0:
+                    # reservoir sampling (Knuth / Algorithm R)
+                    n_seen_extra += 1
+                    if len(reservoir) < n_extra_slots:
+                        reservoir.append(doc)
+                    else:
+                        j = random.randint(0, n_seen_extra - 1)
+                        if j < n_extra_slots:
+                            reservoir[j] = doc
 
-    print(f"  {n_written} documents saved -> {doc_path}.")
+            # Early exit: all relevant docs found AND reservoir is full
+            if (
+                n_extra_slots is not None
+                and len(relevant_docs) == n_relevant
+                and len(reservoir) == n_extra_slots
+            ):
+                # Can't stop early – we need to scan the whole corpus so that
+                # the reservoir sample is unbiased. Keep going.
+                pass
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    doc_path = DATA_DIR / "documents.jsonl"
+    all_docs = list(relevant_docs.values()) + reservoir
+
+    with doc_path.open("w", encoding="utf-8") as f:
+        for doc in all_docs:
+            f.write(json.dumps(dataclasses.asdict(doc)) + "\n")
+
+    missing = relevant_doc_ids - relevant_docs.keys()
+    if missing:
+        print(f"  WARNING: {len(missing)} relevant doc(s) not found in corpus: {missing}")
+    print(
+        f"  {len(relevant_docs)} relevant + {len(reservoir)} random docs "
+        f"= {len(all_docs)} total saved -> {doc_path}."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +226,13 @@ def main() -> None:
     if args.queries_only:
         _stream_queries(args.n_queries)
     elif args.docs_only:
-        _stream_docs(max_docs=args.max_docs)
+        relevant_doc_ids = _load_relevant_doc_ids_from_disk()
+        if not relevant_doc_ids:
+            print("  Warning: no saved queries found; relevant docs cannot be guaranteed.")
+        _stream_docs(relevant_doc_ids=relevant_doc_ids, max_docs=args.max_docs)
     else:
-        _stream_queries(args.n_queries)
-        _stream_docs(max_docs=args.max_docs)
+        relevant_doc_ids = _stream_queries(args.n_queries)
+        _stream_docs(relevant_doc_ids=relevant_doc_ids, max_docs=args.max_docs)
     print("Done.")
 
 

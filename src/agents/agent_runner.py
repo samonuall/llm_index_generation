@@ -7,10 +7,13 @@ run(n_loops) to start the iterative eval-improve loop.
 
 from __future__ import annotations
 
+import json
 import sys
 import importlib.util
 import pathlib
 from abc import ABC, abstractmethod
+
+_BASELINE_RESULTS_PATH = pathlib.Path(__file__).parent / "baseline_results.json"
 
 _PROJECT_ROOT = pathlib.Path(__file__).parents[2]
 
@@ -26,16 +29,14 @@ class AgentRunner(ABC):
             _PROJECT_ROOT / "src" / "agents" / self.agent_name / "preprocess.py"
         )
 
-        # Run baseline eval (raw documents, no preprocessing) before any agent loops
+        # Baseline results loaded from src/agents/baseline_results.json
         print(f"\n{'#'*60}")
-        print(f"# Baseline eval (raw documents, no preprocessing)")
+        print(f"# Baseline (raw documents, no preprocessing) — from baseline_results.json")
         print(f"{'#'*60}")
-        try:
-            self.baseline_results = self.run_baseline_eval()
-            self.on_baseline_complete(self.baseline_results)
-        except Exception as e:
-            print(f"[agent_runner] Baseline eval failed: {e}")
-            self.baseline_results = None
+        self.baseline_results = json.loads(_BASELINE_RESULTS_PATH.read_text(encoding="utf-8"))
+        print(f"  Recall@100 : {self.baseline_results['recall_at_k']:.4f}")
+        print(f"  nDCG@10    : {self.baseline_results['ndcg']:.4f}")
+        self.on_baseline_complete(self.baseline_results)
 
         for i in range(n_loops):
             print(f"\n{'#'*60}")
@@ -72,29 +73,6 @@ class AgentRunner(ABC):
             except Exception as e:
                 print(f"[agent_runner] Final eval failed: {e}")
 
-    def run_baseline_eval(self) -> dict:
-        """
-        Run eval using the baseline passthrough preprocessor (raw documents,
-        no modification). Used to establish a performance floor before agent loops.
-        """
-        eval_scripts_dir = _PROJECT_ROOT / "src" / "evaluation" / "scripts"
-        eval_dir = _PROJECT_ROOT / "src" / "evaluation"
-        src_dir = _PROJECT_ROOT / "src"
-
-        for p in [str(eval_scripts_dir), str(eval_dir), str(src_dir)]:
-            if p not in sys.path:
-                sys.path.insert(0, p)
-
-        from test_preprocessing import evaluate  # type: ignore
-
-        baseline_path = _PROJECT_ROOT / "src" / "agents" / "baseline" / "preprocess.py"
-        spec = importlib.util.spec_from_file_location("_agent_baseline_preprocess", baseline_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
-
-        preprocessor = module.Preprocessor()
-        return evaluate(preprocessor, top_k=5)
-
     def run_eval(self) -> dict:
         """
         Dynamically load Preprocessor from the agent's preprocess.py and run
@@ -122,7 +100,7 @@ class AgentRunner(ABC):
         spec.loader.exec_module(module)  # type: ignore[union-attr]
 
         preprocessor = module.Preprocessor()
-        return evaluate(preprocessor, top_k=5)
+        return evaluate(preprocessor, top_k=100)
 
     def on_baseline_complete(self, baseline_results: dict) -> None:
         """Called after baseline eval; override to inject baseline numbers into system instruction."""

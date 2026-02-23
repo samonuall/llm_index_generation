@@ -49,10 +49,11 @@ class LiteLLMAgent(AgentRunner):
 
     def on_baseline_complete(self, baseline_results: dict) -> None:
         k = baseline_results["top_k"]
+        ndcg_k = baseline_results.get("ndcg_k", 10)
         info = (
-            f"- Recall@{k}: {baseline_results['recall_at_k']:.4f}\n"
-            f"- MRR:      {baseline_results['mrr']:.4f}\n"
-            f"- Chunks:   {baseline_results['n_chunks']}"
+            f"- Recall@{k}:    {baseline_results['recall_at_k']:.4f}\n"
+            f"- nDCG@{ndcg_k}:    {baseline_results['ndcg']:.4f}\n"
+            f"- Chunks:       {baseline_results['n_chunks']}"
         )
         self._system_instruction = self._system_instruction_template.replace("{baseline_info}", info)
 

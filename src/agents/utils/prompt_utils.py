@@ -35,7 +35,7 @@ def build_eval_prompt(
             for r in top_misses
         ]
         hit_lines = [
-            f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}  \"{r['query_text']}\""
+            f"  - [{r['query_id']}] rank={r['rank']} nDCG={r['ndcg']:.3f}  \"{r['query_text']}\""
             for r in worst_hits
         ]
 
@@ -56,8 +56,8 @@ def build_eval_prompt(
         f"## Current implementation\n```python\n{current_code}\n```\n\n"
         f"## Last eval results (top-{k})\n"
         f"- Recall@{k}: {eval_results['recall_at_k']:.4f}\n"
-        f"- MRR: {eval_results['mrr']:.4f}\n"
+        f"- nDCG@{eval_results.get('ndcg_k', 10)}: {eval_results.get('ndcg', 0.0):.4f}\n"
         f"- Chunks indexed: {eval_results['n_chunks']}\n"
         f"{per_query_section}\n"
-        "Improve the implementation to increase Recall and MRR."
+        "Improve the implementation to increase Recall@100 and nDCG@10."
     )

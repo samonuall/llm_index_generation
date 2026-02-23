@@ -32,6 +32,7 @@ llm_index_generation/
     └── agents/
         ├── CONTEXT.md                 # Dataset and interface docs for agent prompts
         ├── agent_runner.py            # Abstract base class for iterative LLM agents
+        ├── baseline_results.json      # Baseline eval numbers loaded by AgentRunner
         ├── baseline/
         │   └── preprocess.py          # Passthrough reference implementation
         ├── gemini_sdk/
@@ -54,9 +55,18 @@ llm_index_generation/
 uv sync
 
 # Download the dataset (run once)
-uv run python -m src.evaluation.scripts.get_data            # 50 queries (default)
-uv run python -m src.evaluation.scripts.get_data --n-queries 100
+# Default: 135 queries + all relevant documents + random extras to reach max-docs
+uv run python -m src.evaluation.scripts.get_data                         # 135 queries, all docs
+uv run python -m src.evaluation.scripts.get_data --n-queries 100         # 100 queries, all docs
+uv run python -m src.evaluation.scripts.get_data --max-docs 2000         # 135 queries, 2000 docs total
+
+# Re-download only documents (uses relevant IDs from existing queries.jsonl)
+uv run python -m src.evaluation.scripts.get_data --docs-only --max-docs 2000
 ```
+
+`get_data.py` always guarantees that every document referenced by a saved query is included.
+If `--max-docs` exceeds the number of relevant documents, the remaining slots are filled with
+a uniformly random reservoir sample of non-relevant corpus documents (single-pass, Algorithm R).
 
 Requires a `.env` file with API keys for the relevant agent:
 - `GOOGLE_API_KEY` — for `gemini_sdk`
@@ -105,7 +115,7 @@ uv run mlflow ui
 - **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb) — `tip_of_the_tongue` split
 - **Corpus**: Full Wikipedia articles (streamed from HuggingFace, not stored)
 - **Queries**: "Tip of the tongue" natural language descriptions of Wikipedia entities
-- **Scope**: 50 eval queries, each with one or more ground-truth `relevant_doc_ids`
+- **Scope**: 135 eval queries (default), each with one or more ground-truth `relevant_doc_ids`
 
 ## Agent Interface
 
@@ -162,3 +172,4 @@ The retriever is BM25 (`bm25s`) with an English Snowball stemmer. Agents cannot 
 - Never modify anything in `src/evaluation/` — it is the static ground truth
 - Agent code stays entirely within `src/agents/<name>/`
 - `data/` is generated; run `get_data.py` to populate it
+- Update `src/agents/baseline_results.json` whenever baseline numbers change (e.g. after re-running with a different dataset size); `AgentRunner` loads this file at runtime
