@@ -42,20 +42,22 @@ class AgentRunner(ABC):
             print(f"# Iteration {i + 1} / {n_loops}")
             print(f"{'#'*60}")
 
+            prompt = None
             if not preprocess_path.read_text(encoding="utf-8").strip():
                 print("[agent_runner] preprocess.py is empty, skipping eval.")
                 eval_results = None
+                prompt = "[agent_runner] No eval results available, using empty prompt."
             else:
                 try:
                     eval_results = self.run_eval()
                 except Exception as e:
                     print(f"[agent_runner] Eval failed (iteration {i + 1}): {e}")
                     eval_results = None
+                    prompt = f"[agent_runner] Eval failed with error: {e}, current implementation:\n{preprocess_path.read_text(encoding='utf-8')}"
 
             if eval_results:
                 prompt = self.build_prompt(iteration=i, eval_results=eval_results)
-            else:
-                prompt = "[agent_runner] No eval results available, using empty prompt."
+            
             self.call_llm(prompt=prompt, iteration=i)
 
         # Run final eval to show results of the last generated preprocess.py

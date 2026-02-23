@@ -99,7 +99,7 @@ class LiteLLMAgent(AgentRunner):
 
         # Log the prompt
         prompt_log_path = logs_dir / f"iteration_{iteration + 1}_prompt.log"
-        prompt_log_path.write_text(header + prompt, encoding="utf-8")
+        prompt_log_path.write_text(header + self._system_instruction + "\n\n" + prompt, encoding="utf-8")
 
         print(f"[lite_llm_agent] Calling {self._model} (iteration {iteration + 1}) ...")
 
@@ -120,7 +120,6 @@ class LiteLLMAgent(AgentRunner):
         with log_path.open("w", encoding="utf-8") as log_file:
             log_file.write(header)
             log_file.write(f"--- finish_reason: {finish_reason}\n\n")
-            log_file.write(self._system_instruction + "\n\n")
             log_file.write(text)
 
         # Extract the first ```python ... ``` block and write it to preprocess.py
