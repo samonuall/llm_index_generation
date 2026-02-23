@@ -34,7 +34,7 @@ from schema import Document, EvalQuery
 HF_REPO   = "jfkback/crumb"
 HF_SPLIT  = "tip_of_the_tongue"
 DATA_DIR  = Path(__file__).parents[2] / "data"
-N_QUERIES = 50
+N_QUERIES = 100
 
 
 # ---------------------------------------------------------------------------
