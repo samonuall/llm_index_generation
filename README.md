@@ -84,11 +84,21 @@ uv run python -m main --agent lite_llm_agent --loops 5
 # If the LLM provider's safety filters block dataset content, omit raw query text from prompts:
 uv run python -m main --agent gemini_sdk --loops 5 --no-query-text
 
+# Enable MLflow tracing for LiteLLM calls (lite_llm_agent only):
+uv run python -m main --agent lite_llm_agent --loops 5 --enable_tracing
+
 # Dry-run with a mock LLM response (no API calls, useful for testing the pipeline):
 uv run python -m main --agent test_agent --loops 1
 ```
 
-The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats. `--no-query-text` strips the raw query strings from that feedback while preserving query IDs, doc IDs, and rank signals. `test_agent` uses `LiteLLMAgent` with `test_mode=True`, which injects a mock response instead of making a real API call — useful for validating the pipeline without incurring API costs.
+The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats. `--no-query-text` strips the raw query strings from that feedback while preserving query IDs, doc IDs, and rank signals. `--enable_tracing` enables MLflow auto-logging for LiteLLM calls via `mlflow.litellm.autolog()` — only supported for `lite_llm_agent`. `test_agent` uses `LiteLLMAgent` with `test_mode=True`, which injects a mock response instead of making a real API call — useful for validating the pipeline without incurring API costs.
+
+## Seeing Traces
+Run the following to see traces recorded when `--enable_tracing` is used with `lite_llm_agent`:
+
+```bash
+uv run mlflow ui
+```
 
 ## Dataset
 
