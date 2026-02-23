@@ -21,6 +21,7 @@ load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
 
 from ..agent_runner import AgentRunner
+from ..utils.prompt_utils import build_eval_prompt
 
 
 def _load_config() -> dict:
@@ -35,7 +36,7 @@ class LiteLLMAgent(AgentRunner):
     def __init__(self, include_query_text: bool = True) -> None:
         config = _load_config()
         self._model: str = config["model"]
-        self._temperature: float = float(config.get("temperature", 0.7))
+        self._temperature: float = float(config.get("temperature", 1.0))
         self._api_key: str = os.environ.get("LITE_LLM_KEY", "")
 
         context_dir = _AGENT_DIR / "context"
@@ -45,66 +46,12 @@ class LiteLLMAgent(AgentRunner):
         self._include_query_text = include_query_text
 
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
-        preprocess_path = _AGENT_DIR / "preprocess.py"
-        current_code = preprocess_path.read_text(encoding="utf-8").strip()
-
-        if not current_code or eval_results is None:
-            return self._system_instruction
-
-        k = eval_results["top_k"]
-
-        query_results = eval_results.get("query_results", [])
-        misses = [r for r in query_results if not r["hit"]]
-        hits = [r for r in query_results if r["hit"]]
-
-        # Format missed queries
-        missed_lines = []
-        for r in misses:
-            if self._include_query_text:
-                missed_lines.append(
-                    f"  - [{r['query_id']}] \"{r['query_text']}\"\n"
-                    f"    Expected doc(s): {r['relevant_doc_ids']}\n"
-                    f"    Retrieved docs : {r['retrieved_doc_ids']}"
-                )
-            else:
-                missed_lines.append(
-                    f"  - [{r['query_id']}]"
-                    f"    Expected doc(s): {r['relevant_doc_ids']}\n"
-                    f"    Retrieved docs : {r['retrieved_doc_ids']}"
-                )
-
-        # Format hits, sorted by rank (worst first)
-        hit_lines = []
-        for r in sorted(hits, key=lambda x: x["rank"] or 0, reverse=True):
-            if self._include_query_text:
-                hit_lines.append(
-                    f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}  \"{r['query_text']}\""
-                )
-            else:
-                hit_lines.append(
-                    f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}"
-                )
-
-        missed_section = (
-            f"### Missed queries ({len(misses)} / {len(query_results)}):\n"
-            + ("\n".join(missed_lines) if missed_lines else "  (none)")
-        )
-        hit_section = (
-            f"### Retrieved queries ({len(hits)} / {len(query_results)}) — sorted worst rank first:\n"
-            + ("\n".join(hit_lines) if hit_lines else "  (none)")
-        )
-
-        return (
-            f"{self._system_instruction}\n\n"
-            f"## Current implementation\n```python\n{current_code}\n```\n\n"
-            f"## Last eval results (top-{k})\n"
-            f"- Recall@{k}: {eval_results['recall_at_k']:.4f}\n"
-            f"- MRR: {eval_results['mrr']:.4f}\n"
-            f"- Chunks indexed: {eval_results['n_chunks']}\n\n"
-            f"## Per-query breakdown\n"
-            f"{missed_section}\n\n"
-            f"{hit_section}\n\n"
-            "Improve the implementation to increase Recall and MRR."
+        current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8").strip()
+        return build_eval_prompt(
+            system_instruction=self._system_instruction,
+            current_code=current_code,
+            eval_results=eval_results,
+            include_query_text=self._include_query_text,
         )
 
     def call_llm(self, prompt: str, iteration: int) -> None:

@@ -1,6 +1,6 @@
 # LiteLLM Agent Configuration
 # Model name as accepted by litellm (e.g. "gpt-4o", "anthropic/claude-3-5-sonnet-20241022")
-model: "gpt-5-mini"
+model: "openai/gpt4o"
 
 # Sampling hyperparameters
 temperature: 1
