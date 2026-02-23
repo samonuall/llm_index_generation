@@ -8,6 +8,7 @@ dependencies = [
     "bm25s>=0.2.14",
     "datasets>=4.5.0",
     "google-genai>=1.63.0",
+    "litellm[mlflow]>=1.81.14",
     "pystemmer>=3.0.0",
     "python-dotenv>=1.2.1",
 ]

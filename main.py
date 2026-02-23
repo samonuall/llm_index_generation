@@ -14,8 +14,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--agent",
-        default="gemini_sdk",
-        choices=["gemini_sdk"],
+        default=None,
+        choices=["gemini_sdk", "lite_llm_agent", "test_agent"],
         help="Which agent to run (default: gemini_sdk)",
     )
     parser.add_argument(
@@ -30,11 +30,26 @@ def main() -> None:
         default=False,
         help="Omit raw query text from the prompt (use when Gemini safety filters block content)",
     )
+    parser.add_argument(
+        "--enable_tracing",
+        action="store_true",
+        default=False,
+        help="Enable tracing of LLM calls (only applies to lite_llm_agent)",
+    )
     args = parser.parse_args()
 
     if args.agent == "gemini_sdk":
-        from src.agents.gemini_sdk.agent import GeminiSdkAgent
+        from src.agents import GeminiSdkAgent
         agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
+    elif args.agent == "lite_llm_agent":
+        from src.agents import LiteLLMAgent
+        if args.enable_tracing:
+            import mlflow
+            mlflow.litellm.autolog()
+        agent = LiteLLMAgent(include_query_text=not args.no_query_text)
+    elif args.agent == "test_agent":
+        from src.agents import LiteLLMAgent
+        agent = LiteLLMAgent(include_query_text=not args.no_query_text, test_mode=True)
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 

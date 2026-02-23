@@ -34,9 +34,15 @@ llm_index_generation/
         ├── agent_runner.py            # Abstract base class for iterative LLM agents
         ├── baseline/
         │   └── preprocess.py          # Passthrough reference implementation
-        └── gemini_sdk/
-            ├── preprocess.py          # Wikipedia section-aware chunker (agent-generated)
-            ├── agent.py               # Gemini-backed iterative agent
+        ├── gemini_sdk/
+        │   ├── preprocess.py          # Wikipedia section-aware chunker (agent-generated)
+        │   ├── agent.py               # Gemini-backed iterative agent
+        │   └── context/
+        │       └── SYSTEM_INSTRUCTION.md  # System prompt template
+        └── lite_llm_agent/
+            ├── preprocess.py          # Agent preprocessor
+            ├── agent.py               # LiteLLM-backed iterative agent (supports test mode)
+            ├── config.yaml            # Model, temperature, and API settings
             └── context/
                 └── SYSTEM_INSTRUCTION.md  # System prompt template
 ```
@@ -48,20 +54,23 @@ llm_index_generation/
 uv sync
 
 # Download the dataset (run once)
-uv run python src/evaluation/scripts/get_data.py            # 50 queries (default)
-uv run python src/evaluation/scripts/get_data.py --n-queries 100
+uv run python -m src.evaluation.scripts.get_data            # 50 queries (default)
+uv run python -m src.evaluation.scripts.get_data --n-queries 100
 ```
 
-Requires a `.env` file with `GOOGLE_API_KEY` for the Gemini-backed agents.
+Requires a `.env` file with API keys for the relevant agent:
+- `GOOGLE_API_KEY` — for `gemini_sdk`
+- `LITELLM_API_KEY` — for `lite_llm_agent` / `test_agent` (or configure via `lite_llm_agent/config.yaml`)
 
 ## Running Evaluation
 
 Evaluate any agent preprocessor against the static BM25 harness:
 
 ```bash
-uv run python src/evaluation/scripts/test_preprocessing.py --agent baseline
-uv run python src/evaluation/scripts/test_preprocessing.py --agent gemini_sdk
-uv run python src/evaluation/scripts/test_preprocessing.py --agent <agent_name> --top-k 20
+uv run python -m src.evaluation.scripts.test_preprocessing --agent baseline
+uv run python -m src.evaluation.scripts.test_preprocessing --agent gemini_sdk
+uv run python -m src.evaluation.scripts.test_preprocessing --agent lite_llm_agent
+uv run python -m src.evaluation.scripts.test_preprocessing --agent <agent_name> --top-k 20
 ```
 
 ## Running an Agent
@@ -69,13 +78,27 @@ uv run python src/evaluation/scripts/test_preprocessing.py --agent <agent_name> 
 Run an iterative LLM agent (eval → improve loop):
 
 ```bash
-uv run python main.py --agent gemini_sdk --loops 5
+uv run python -m main --agent gemini_sdk --loops 5
+uv run python -m main --agent lite_llm_agent --loops 5
 
 # If the LLM provider's safety filters block dataset content, omit raw query text from prompts:
-uv run python main.py --agent gemini_sdk --loops 5 --no-query-text
+uv run python -m main --agent gemini_sdk --loops 5 --no-query-text
+
+# Enable MLflow tracing for LiteLLM calls (lite_llm_agent only):
+uv run python -m main --agent lite_llm_agent --loops 5 --enable_tracing
+
+# Dry-run with a mock LLM response (no API calls, useful for testing the pipeline):
+uv run python -m main --agent test_agent --loops 1
 ```
 
-The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats. `--no-query-text` strips the raw query strings from that feedback while preserving query IDs, doc IDs, and rank signals.
+The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats. `--no-query-text` strips the raw query strings from that feedback while preserving query IDs, doc IDs, and rank signals. `--enable_tracing` enables MLflow auto-logging for LiteLLM calls via `mlflow.litellm.autolog()` — only supported for `lite_llm_agent`. `test_agent` uses `LiteLLMAgent` with `test_mode=True`, which injects a mock response instead of making a real API call — useful for validating the pipeline without incurring API costs.
+
+## Seeing Traces
+Run the following to see traces recorded when `--enable_tracing` is used with `lite_llm_agent`:
+
+```bash
+uv run mlflow ui
+```
 
 ## Dataset
 
@@ -124,12 +147,14 @@ The retriever is BM25 (`bm25s`) with an English Snowball stemmer. Agents cannot 
 |-------|----------|-------|
 | `baseline` | One chunk per document, raw text | Performance floor |
 | `gemini_sdk` | Section-aware Wikipedia chunking with title propagation | Gemini-generated, iteratively improved |
+| `lite_llm_agent` | Configurable via `config.yaml`; uses LiteLLM for provider-agnostic LLM calls | Supports any model accessible via LiteLLM |
+| `test_agent` | Same as `lite_llm_agent` with `test_mode=True` | Returns a mock LLM response; no API calls made |
 
 ## Adding a New Agent
 
 1. Create `src/agents/<name>/preprocess.py` with a `Preprocessor` class (see interface above)
 2. Optionally add an `agent.py` subclassing `AgentRunner` for the iterative loop
-3. Evaluate: `uv run python src/evaluation/scripts/test_preprocessing.py --agent <name>`
+3. Evaluate: `uv run python -m src.evaluation.scripts.test_preprocessing --agent <name>`
 
 ## Conventions
 

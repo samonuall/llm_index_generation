@@ -20,14 +20,15 @@ class AgentRunner(ABC):
 
     def run(self, n_loops: int) -> None:
         """Main eval-improve loop."""
+        preprocess_path = (
+            _PROJECT_ROOT / "src" / "agents" / self.agent_name / "preprocess.py"
+        )
+
         for i in range(n_loops):
             print(f"\n{'#'*60}")
             print(f"# Iteration {i + 1} / {n_loops}")
             print(f"{'#'*60}")
 
-            preprocess_path = (
-                _PROJECT_ROOT / "src" / "agents" / self.agent_name / "preprocess.py"
-            )
             if not preprocess_path.read_text(encoding="utf-8").strip():
                 print("[agent_runner] preprocess.py is empty, skipping eval.")
                 eval_results = None
@@ -40,6 +41,18 @@ class AgentRunner(ABC):
 
             prompt = self.build_prompt(iteration=i, eval_results=eval_results)
             self.call_llm(prompt=prompt, iteration=i)
+
+        # Run final eval to show results of the last generated preprocess.py
+        print(f"\n{'#'*60}")
+        print(f"# Final eval (after {n_loops} loop{'s' if n_loops != 1 else ''})")
+        print(f"{'#'*60}")
+        if not preprocess_path.read_text(encoding="utf-8").strip():
+            print("[agent_runner] preprocess.py is empty, skipping final eval.")
+        else:
+            try:
+                self.run_eval()
+            except Exception as e:
+                print(f"[agent_runner] Final eval failed: {e}")
 
     def run_eval(self) -> dict:
         """
