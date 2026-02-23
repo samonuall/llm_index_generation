@@ -25,23 +25,29 @@ def build_eval_prompt(
         misses = [r for r in query_results if not r["hit"]]
         hits = [r for r in query_results if r["hit"]]
 
+        top_misses = misses[:5]
+        worst_hits = sorted(hits, key=lambda x: x["rank"] or 0, reverse=True)[:5]
+
         missed_lines = [
             f"  - [{r['query_id']}] \"{r['query_text']}\"\n"
             f"    Expected doc(s): {r['relevant_doc_ids']}\n"
             f"    Retrieved docs : {r['retrieved_doc_ids']}"
-            for r in misses
+            for r in top_misses
         ]
         hit_lines = [
             f"  - [{r['query_id']}] rank={r['rank']} rr={r['reciprocal_rank']:.3f}  \"{r['query_text']}\""
-            for r in sorted(hits, key=lambda x: x["rank"] or 0, reverse=True)
+            for r in worst_hits
         ]
 
+        missed_suffix = f" (showing {len(top_misses)} of {len(misses)})" if len(misses) > 5 else ""
+        hit_suffix = f" (showing {len(worst_hits)} of {len(hits)})" if len(hits) > 5 else ""
+
         missed_section = (
-            f"### Missed queries ({len(misses)} / {len(query_results)}):\n"
+            f"### Missed queries ({len(misses)} / {len(query_results)}){missed_suffix}:\n"
             + ("\n".join(missed_lines) if missed_lines else "  (none)")
         )
         hit_section = (
-            f"### Retrieved queries ({len(hits)} / {len(query_results)}) — sorted worst rank first:\n"
+            f"### Retrieved queries ({len(hits)} / {len(query_results)}){hit_suffix} — sorted worst rank first:\n"
             + ("\n".join(hit_lines) if hit_lines else "  (none)")
         )
         per_query_section = f"\n## Per-query breakdown\n{missed_section}\n\n{hit_section}\n"

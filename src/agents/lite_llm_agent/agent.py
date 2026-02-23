@@ -42,9 +42,19 @@ class LiteLLMAgent(AgentRunner):
         context_dir = _AGENT_DIR / "context"
         dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
         template = (context_dir / "SYSTEM_INSTRUCTION.md").read_text(encoding="utf-8")
-        self._system_instruction = template.replace("{dataset_info}", dataset_info)
+        self._system_instruction_template = template.replace("{dataset_info}", dataset_info)
+        self._system_instruction = self._system_instruction_template.replace("{baseline_info}", "(not yet computed)")
         self._include_query_text = include_query_text
         self._test_mode = test_mode
+
+    def on_baseline_complete(self, baseline_results: dict) -> None:
+        k = baseline_results["top_k"]
+        info = (
+            f"- Recall@{k}: {baseline_results['recall_at_k']:.4f}\n"
+            f"- MRR:      {baseline_results['mrr']:.4f}\n"
+            f"- Chunks:   {baseline_results['n_chunks']}"
+        )
+        self._system_instruction = self._system_instruction_template.replace("{baseline_info}", info)
 
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
         current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8").strip()
@@ -110,12 +120,8 @@ class LiteLLMAgent(AgentRunner):
         with log_path.open("w", encoding="utf-8") as log_file:
             log_file.write(header)
             log_file.write(f"--- finish_reason: {finish_reason}\n\n")
+            log_file.write(self._system_instruction + "\n\n")
             log_file.write(text)
-
-        if not text:
-            print(f"[lite_llm_agent] Empty response from API. finish_reason={finish_reason}")
-        else:
-            print(text)
 
         # Extract the first ```python ... ``` block and write it to preprocess.py
         match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)

@@ -31,9 +31,19 @@ class GeminiSdkAgent(AgentRunner):
         context_dir = _AGENT_DIR / "context"
         dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
         template = (context_dir / "SYSTEM_INSTRUCTION.md").read_text(encoding="utf-8")
-        self._system_instruction = template.replace("{dataset_info}", dataset_info)
+        self._system_instruction_template = template.replace("{dataset_info}", dataset_info)
+        self._system_instruction = self._system_instruction_template.replace("{baseline_info}", "(not yet computed)")
         self._client = genai.Client()
         self._include_query_text = include_query_text
+
+    def on_baseline_complete(self, baseline_results: dict) -> None:
+        k = baseline_results["top_k"]
+        info = (
+            f"- Recall@{k}: {baseline_results['recall_at_k']:.4f}\n"
+            f"- MRR:      {baseline_results['mrr']:.4f}\n"
+            f"- Chunks:   {baseline_results['n_chunks']}"
+        )
+        self._system_instruction = self._system_instruction_template.replace("{baseline_info}", info)
 
     def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
         current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8").strip()
