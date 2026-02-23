@@ -1452,6 +1452,7 @@ dependencies = [
     { name = "litellm", extra = ["mlflow"] },
     { name = "pystemmer" },
     { name = "python-dotenv" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
@@ -1462,6 +1463,7 @@ requires-dist = [
     { name = "litellm", extras = ["mlflow"], specifier = ">=1.81.14" },
     { name = "pystemmer", specifier = ">=3.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "tqdm", specifier = ">=4.67.3" },
 ]
 
 [[package]]

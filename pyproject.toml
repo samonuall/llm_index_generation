@@ -11,4 +11,5 @@ dependencies = [
     "litellm[mlflow]>=1.81.14",
     "pystemmer>=3.0.0",
     "python-dotenv>=1.2.1",
+    "tqdm>=4.67.3",
 ]
