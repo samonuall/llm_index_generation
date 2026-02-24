@@ -101,11 +101,20 @@ def evaluate(preprocessor: BasePreprocessor, top_k: int = 100, ndcg_k: int = 10)
                 rank_of_first_hit = rank
                 break
 
-        # nDCG@ndcg_k
+        # nDCG@ndcg_k  (deduplicated by doc_id so multi-chunk docs
+        # don't inflate the score – only the first chunk per doc counts)
         dcg = 0.0
-        for rank, doc_id in enumerate(retrieved_doc_ids[:ndcg_k], start=1):
-            if doc_id in relevant:
-                dcg += 1.0 / math.log2(rank + 1)
+        seen_doc_ids: set[str] = set()
+        doc_rank = 0
+        for chunk_doc_id in retrieved_doc_ids:
+            if chunk_doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(chunk_doc_id)
+            doc_rank += 1
+            if doc_rank > ndcg_k:
+                break
+            if chunk_doc_id in relevant:
+                dcg += 1.0 / math.log2(doc_rank + 1)
         ideal_count = min(len(relevant), ndcg_k)
         idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_count + 1))
         ndcg_score = dcg / idcg if idcg > 0 else 0.0
