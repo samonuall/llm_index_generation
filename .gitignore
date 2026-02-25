@@ -1,9 +1,31 @@
 .venv
-**/__pycache__/
 .env
-node_modules
-**/logs/
-src/agents/**/preprocess.py
 **.DS_Store
 mlflow.db
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+**/logs/
+*.log
+
+# Data & archives
 data/**
+*.zip
+*.whl
+
+# Temp files
+*.tmp
+*.temp
+.cache/
+
+# Project-specific
+src/agents/**/preprocess.py
+
+# Egg-info (build artifacts)
+*.egg-info/
+dist/
+build/

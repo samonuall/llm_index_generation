@@ -1,3 +1,17 @@
+Metadata-Version: 2.4
+Name: llm-index-generation
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: bm25s>=0.2.14
+Requires-Dist: datasets>=4.5.0
+Requires-Dist: google-genai>=1.63.0
+Requires-Dist: litellm[mlflow]>=1.81.14
+Requires-Dist: pystemmer>=3.0.0
+Requires-Dist: python-dotenv>=1.2.1
+Requires-Dist: tqdm>=4.67.3
+
 # LLM Index Generation
 
 Research project testing LLM-driven approaches for iteratively writing preprocessing code to improve BM25 retrieval quality. An agent receives feedback from a static evaluation harness and iterates on its own preprocessing implementation.
@@ -27,7 +41,6 @@ llm_index_generation/
     │   ├── base.py                    # BasePreprocessor ABC
     │   └── scripts/
     │       ├── get_data.py            # One-time data download from HuggingFace
-    |       ├── get_data_extended.py            # One-time data download from HuggingFace extended with other tasks
     │       ├── build_index.py         # BM25 index builder (bm25s + English stemmer)
     │       └── test_preprocessing.py  # Eval harness: Recall@k + MRR
     └── agents/
@@ -174,33 +187,3 @@ The retriever is BM25 (`bm25s`) with an English Snowball stemmer. Agents cannot 
 - Agent code stays entirely within `src/agents/<name>/`
 - `data/` is generated; run `get_data.py` to populate it
 - Update `src/agents/baseline_results.json` whenever baseline numbers change (e.g. after re-running with a different dataset size); `AgentRunner` loads this file at runtime
-
-## Exntension
-
-### get_data_extended.py
-
-```
-# Install dependencies
-uv sync
-
-# Download the dataset (run once)
-# Default: tip_of_the_tongue split, 135 queries, all relevant docs
-uv run python -m src.evaluation.scripts.get_data_extended
-uv run python -m src.evaluation.scripts.get_data_extended --split paper_retrieval
-uv run python -m src.evaluation.scripts.get_data_extended --split stack_exchange
-uv run python -m src.evaluation.scripts.get_data_extended --max-docs 2000
-uv run python -m src.evaluation.scripts.get_data_extended --docs-only --max-docs 2000
-```
-get_data_extended.py supports all 8 CRUMB splits: tip_of_the_tongue, paper_retrieval,
-stack_exchange, clinical_trial, legal_qa, theorem_retrieval, code_retrieval,
-and set_operation_entity_retrieval. It always guarantees that every document referenced
-by a saved query is included. If --max-docs exceeds the number of relevant documents,
-the remaining slots are filled with a uniformly random reservoir sample of non-relevant
-corpus documents (single-pass, Algorithm R).
-
-```
-uv run python -m src.evaluation.scripts.test_preprocessing --agent baseline
-uv run python -m src.evaluation.scripts.test_preprocessing --agent gemini_sdk
-uv run python -m src.evaluation.scripts.test_preprocessing --agent lite_llm_agent
-uv run python -m src.evaluation.scripts.test_preprocessing --agent <agent_name> --top-k 20
-```
