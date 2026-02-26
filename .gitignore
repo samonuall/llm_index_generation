@@ -22,9 +22,6 @@ data/**
 *.temp
 .cache/
 
-# Project-specific
-src/agents/**/preprocess.py
-
 # Egg-info (build artifacts)
 *.egg-info/
 dist/
