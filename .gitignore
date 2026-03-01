@@ -18,6 +18,7 @@ data/*/
 data/*/*.jsonl
 *.zip
 *.whl
+results/*/
 
 # Temp files
 *.tmp

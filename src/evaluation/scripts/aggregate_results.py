@@ -1,146 +1,280 @@
 """
-Aggregate and compare all saved results across algorithms, agents, and splits.
+Aggregate and compare all evaluation results across agents and splits.
 
 Usage:
     python -m src.evaluation.scripts.aggregate_results
     python -m src.evaluation.scripts.aggregate_results --split paper_retrieval
-    python -m src.evaluation.scripts.aggregate_results --algorithm bm25
-    python -m src.evaluation.scripts.aggregate_results --export results_summary.csv
+    python -m src.evaluation.scripts.aggregate_results --agent baseline
+    python -m src.evaluation.scripts.aggregate_results --export results.csv
 """
 
 import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Dict
-import pandas as pd
+from typing import List, Dict, Optional
 
 _PROJECT_ROOT = Path(__file__).parents[3]
 RESULTS_DIR = _PROJECT_ROOT / "results"
 
 
 def load_all_results(
-    algorithm: str = None,
-    agent: str = None,
-    split: str = None
+    split_filter: Optional[str] = None,
+    agent_filter: Optional[str] = None,
 ) -> List[Dict]:
-    """Load all result JSON files, optionally filtered."""
+    """Load all result JSON files, optionally filtered by split or agent."""
     if not RESULTS_DIR.exists():
         return []
     
     results = []
     
-    # Traverse: results/<algorithm>/<agent>/*.json
-    for algo_dir in RESULTS_DIR.iterdir():
-        if not algo_dir.is_dir():
-            continue
-        if algorithm and algo_dir.name != algorithm:
+    for split_dir in RESULTS_DIR.iterdir():
+        if not split_dir.is_dir():
             continue
         
-        for agent_dir in algo_dir.iterdir():
-            if not agent_dir.is_dir():
-                continue
-            if agent and agent_dir.name != agent:
+        split_name = split_dir.name
+        if split_filter and split_name != split_filter:
+            continue
+        
+        for result_file in split_dir.glob("*.json"):
+            filename = result_file.name
+            
+            # Skip non-JSON files
+            if not filename.endswith(".json"):
                 continue
             
-            for result_file in agent_dir.glob("*.json"):
-                try:
-                    with result_file.open('r') as f:
-                        data = json.load(f)
-                    
-                    # Filter by split if specified
-                    if split and data.get("split") != split:
-                        continue
-                    
-                    # Flatten for easy tabular display
-                    flat = {
-                        "algorithm": data.get("metadata", {}).get("algorithm", algo_dir.name),
-                        "agent": data.get("metadata", {}).get("agent", agent_dir.name),
-                        "split": data.get("split", "unknown"),
-                        "n_docs": data.get("config", {}).get("n_docs", 0),
-                        "top_k": data.get("config", {}).get("top_k", 0),
-                        "timestamp": data.get("metadata", {}).get("timestamp", "unknown"),
-                    }
-                    
-                    # Add CRUMB metrics
-                    crumb = data.get("crumb_metrics", {}) or {}
-                    for k, v in crumb.items():
-                        flat[k] = v
-                    
-                    results.append(flat)
-                    
-                except Exception as e:
-                    print(f"⚠️  Error loading {result_file}: {e}")
+            # Skip CRUMB format files (end with _crumb.jsonl but might be _crumb.json)
+            if "_crumb" in filename:
+                continue
+            
+            # Skip query results files
+            if "_results" in filename:
+                continue
+            
+            # Only load main summary files (should have pattern: agent_Ndocs_kK.json)
+            # Skip if it doesn't have the expected pattern
+            if not ("docs_k" in filename or "docs_" in filename):
+                continue
+            
+            try:
+                with result_file.open('r') as f:
+                    data = json.load(f)
+                
+                agent_name = data.get('agent', 'unknown')
+                if agent_filter and agent_name != agent_filter:
+                    continue
+                
+                # Build flattened record
+                record = {
+                    'agent': agent_name,
+                    'split': data.get('split', split_name),
+                    'timestamp': data.get('timestamp', 'unknown'),
+                    'n_docs': data.get('config', {}).get('n_docs', 0),
+                    'n_queries': data.get('config', {}).get('n_queries', 0),
+                    'chunks_per_doc': data.get('config', {}).get('chunks_per_doc', 0),
+                }
+                
+                # Add quick metrics
+                metrics = data.get('metrics', {})
+                if metrics:
+                    record['recall@10'] = metrics.get('recall_at_10', None)
+                    record['recall@100'] = metrics.get('recall_at_100', None)
+                    record['ndcg@10_quick'] = metrics.get('ndcg_at_10', None)
+                
+                # Add CRUMB metrics if available
+                crumb = data.get('crumb_metrics', {}) or {}
+                if crumb:
+                    record['nDCG@10'] = crumb.get('nDCG@10', None)
+                    record['nDCG@5'] = crumb.get('nDCG@5', None)
+                    record['R@10'] = crumb.get('R@10', None)
+                    record['R@100'] = crumb.get('R@100', None)
+                    record['P@10'] = crumb.get('P@10', None)
+                    record['RR@10'] = crumb.get('RR@10', None)
+                else:
+                    record['nDCG@10'] = None
+                    record['nDCG@5'] = None
+                    record['R@10'] = None
+                    record['R@100'] = None
+                    record['P@10'] = None
+                    record['RR@10'] = None
+                
+                results.append(record)
+                
+            except Exception as e:
+                print(f"⚠️  Error loading {result_file}: {e}", file=sys.stderr)
     
     return results
 
 
-def print_results_table(results: List[Dict], sort_by: str = "nDCG@10"):
-    """Print results as a formatted table."""
+def print_comparison_table(results: List[Dict], sort_by: str = 'nDCG@10'):
+    """Print results as a formatted comparison table."""
     if not results:
         print("No results found.")
         return
     
-    df = pd.DataFrame(results)
+    # Sort by metric (descending, NaN last) then by agent
+    def sort_key(r):
+        # Try CRUMB metric first, then fall back to quick metric
+        val = r.get(sort_by)
+        if val is None and sort_by == 'nDCG@10':
+            val = r.get('ndcg@10_quick')  # Fallback to quick metric
+        if val is None:
+            return (1, r['agent'])  # NaN last
+        return (0, -val, r['agent'])
     
-    # Sort by metric (descending, with NaN last)
-    if sort_by in df.columns:
-        df = df.sort_values(by=sort_by, ascending=False, na_position='last')
+    results = sorted(results, key=sort_key)
     
-    # Select columns to display
-    display_cols = ["algorithm", "agent", "split", "n_docs", "nDCG@10", "nDCG@5", "R@100", "P@10", "RR@10"]
-    display_cols = [c for c in display_cols if c in df.columns]
+    print("\n" + "="*140)
+    print("EVALUATION RESULTS COMPARISON")
+    print("="*140)
+    print(f"\n{'Agent':<20} {'Split':<25} {'Docs':<10} {'Queries':<8} {'Chunks/Doc':<12} {'nDCG@10':<10} {'R@10':<10} {'R@100':<10}")
+    print("-"*140)
     
-    print("\n" + "="*100)
-    print("AGGREGATED RESULTS")
-    print("="*100)
-    print(df[display_cols].to_string(index=False))
-    print("="*100)
+    for r in results:
+        # Try CRUMB metrics first, fall back to quick metrics
+        ndcg = r.get('nDCG@10') or r.get('ndcg@10_quick')
+        r10 = r.get('R@10') or r.get('recall@10')
+        r100 = r.get('R@100') or r.get('recall@100')
+        
+        ndcg_str = f"{ndcg:.4f}" if ndcg is not None else "N/A"
+        r10_str = f"{r10:.4f}" if r10 is not None else "N/A"
+        r100_str = f"{r100:.4f}" if r100 is not None else "N/A"
+        
+        # Add indicator if using quick metrics
+        suffix = ""
+        if r.get('nDCG@10') is None and ndcg is not None:
+            suffix = "*"  # Mark fallback metrics
+        
+        print(
+            f"{r['agent']:<20} {r['split']:<25} {r['n_docs']:<10,} "
+            f"{r['n_queries']:<8} {r['chunks_per_doc']:<12.2f} "
+            f"{ndcg_str:<10}{suffix} {r100_str:<10} {r10_str:<10}"
+        )
+    
+    print("="*140)
     print(f"\nTotal runs: {len(results)}")
+    print(f"Sorted by: {sort_by} (descending)")
+    
+    # Check if any used fallback metrics
+    has_fallback = any(r.get('nDCG@10') is None and r.get('ndcg@10_quick') is not None for r in results)
+    if has_fallback:
+        print("\n* = Using quick metrics (CRUMB eval didn't run or failed)")
+        print("    Re-run evaluation to get official CRUMB metrics")
+    
+    # Show summary stats
+    valid_ndcg = []
+    for r in results:
+        ndcg = r.get('nDCG@10') or r.get('ndcg@10_quick')
+        if ndcg is not None:
+            valid_ndcg.append(ndcg)
+    
+    if valid_ndcg:
+        print(f"\nnDCG@10 statistics:")
+        print(f"  Mean: {sum(valid_ndcg)/len(valid_ndcg):.4f}")
+        print(f"  Min:  {min(valid_ndcg):.4f}")
+        print(f"  Max:  {max(valid_ndcg):.4f}")
+
+
+def print_by_split_table(results: List[Dict]):
+    """Print results grouped by split."""
+    if not results:
+        print("No results found.")
+        return
+    
+    # Group by split
+    by_split = {}
+    for r in results:
+        split = r['split']
+        if split not in by_split:
+            by_split[split] = []
+        by_split[split].append(r)
+    
+    print("\n" + "="*140)
+    print("RESULTS BY SPLIT")
+    print("="*140)
+    
+    for split in sorted(by_split.keys()):
+        split_results = by_split[split]
+        print(f"\n{'='*60}")
+        print(f"Split: {split} ({len(split_results)} runs)")
+        print(f"{'='*60}")
+        print(f"\n{'Agent':<20} {'nDCG@10':<10} {'R@100':<10} {'P@10':<10} {'Chunks/Doc':<12}")
+        print("-"*70)
+        
+        # Sort by nDCG descending
+        split_results = sorted(split_results, key=lambda x: (x.get('nDCG@10') or 0), reverse=True)
+        
+        for r in split_results:
+            ndcg = r.get('nDCG@10')
+            p10 = r.get('P@10')
+            r100 = r.get('R@100')
+            
+            ndcg_str = f"{ndcg:.4f}" if ndcg is not None else "N/A"
+            p10_str = f"{p10:.4f}" if p10 is not None else "N/A"
+            r100_str = f"{r100:.4f}" if r100 is not None else "N/A"
+            
+            print(
+                f"{r['agent']:<20} {ndcg_str:<10} {r100_str:<10} {p10_str:<10} "
+                f"{r['chunks_per_doc']:<12.2f}"
+            )
 
 
 def export_to_csv(results: List[Dict], output_path: str):
     """Export results to CSV."""
-    df = pd.DataFrame(results)
-    df.to_csv(output_path, index=False)
+    import csv
+    
+    if not results:
+        print("No results to export.")
+        return
+    
+    # Get all unique keys
+    all_keys = set()
+    for r in results:
+        all_keys.update(r.keys())
+    
+    fieldnames = sorted(all_keys)
+    
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+    
     print(f"\n✓ Exported {len(results)} results to: {output_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Aggregate evaluation results")
-    parser.add_argument("--algorithm", type=str, help="Filter by algorithm (e.g., 'bm25')")
-    parser.add_argument("--agent", type=str, help="Filter by agent")
-    parser.add_argument("--split", type=str, help="Filter by split")
+    parser = argparse.ArgumentParser(description="Aggregate and compare evaluation results")
+    parser.add_argument("--split", type=str, help="Filter by split name")
+    parser.add_argument("--agent", type=str, help="Filter by agent name")
     parser.add_argument("--sort-by", type=str, default="nDCG@10", help="Metric to sort by")
+    parser.add_argument("--by-split", action="store_true", help="Group results by split")
     parser.add_argument("--export", type=str, help="Export to CSV file")
     
     args = parser.parse_args()
     
-    print(f"\nLoading results from: {RESULTS_DIR}")
-    if args.algorithm:
-        print(f"  Filter: algorithm = {args.algorithm}")
-    if args.agent:
-        print(f"  Filter: agent = {args.agent}")
+    print(f"\nScanning results from: {RESULTS_DIR}")
     if args.split:
         print(f"  Filter: split = {args.split}")
+    if args.agent:
+        print(f"  Filter: agent = {args.agent}")
     
-    results = load_all_results(
-        algorithm=args.algorithm,
-        agent=args.agent,
-        split=args.split
-    )
+    results = load_all_results(split_filter=args.split, agent_filter=args.agent)
     
     if not results:
-        print("\n⚠️  No results found matching filters.")
-        print("\nAvailable results structure:")
+        print("\n⚠️  No results found.")
+        print("\nAvailable splits:")
         if RESULTS_DIR.exists():
-            for algo in RESULTS_DIR.iterdir():
-                if algo.is_dir():
-                    agents = [a.name for a in algo.iterdir() if a.is_dir()]
-                    print(f"  {algo.name}/ → agents: {', '.join(agents)}")
-        return
+            for split_dir in RESULTS_DIR.iterdir():
+                if split_dir.is_dir():
+                    n_files = len(list(split_dir.glob("*_k100.json")))
+                    if n_files > 0:
+                        print(f"  - {split_dir.name}: {n_files} runs")
+        sys.exit(0)
     
-    print_results_table(results, sort_by=args.sort_by)
+    if args.by_split:
+        print_by_split_table(results)
+    else:
+        print_comparison_table(results, sort_by=args.sort_by)
     
     if args.export:
         export_to_csv(results, args.export)
