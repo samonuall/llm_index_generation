@@ -1,7 +1,7 @@
 {
   "agent": "baseline",
-  "recall_at_k": 0.7037,
-  "ndcg": 0.2989,
+  "recall_at_k": 0.4815,
+  "ndcg": 0.2037,
   "ndcg_k": 10,
   "top_k": 100,
   "n_queries": 135,
