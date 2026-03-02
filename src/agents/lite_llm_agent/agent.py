@@ -37,7 +37,7 @@ class LiteLLMAgent(AgentRunner):
         config = _load_config()
         self._model: str = config["model"]
         self._temperature: float = float(config.get("temperature", 1.0))
-        self._api_key: str = os.environ.get("LITE_LLM_KEY", "")
+        self._api_key: str = os.environ.get("LITELLM_API_KEY", "")
 
         context_dir = _AGENT_DIR / "context"
         dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
@@ -93,8 +93,12 @@ class LiteLLMAgent(AgentRunner):
     def call_llm(self, prompt: str, iteration: int) -> None:
         logs_dir = _AGENT_DIR / "logs"
         logs_dir.mkdir(exist_ok=True)
+        
+        # Create iterations directory
+        iterations_dir = _AGENT_DIR / "iterations"
+        iterations_dir.mkdir(exist_ok=True)
+        
         log_path = logs_dir / f"iteration_{iteration + 1}.log"
-
         timestamp = datetime.datetime.now().isoformat(timespec="seconds")
         header = f"=== Iteration {iteration + 1} | {timestamp} | model={self._model} ===\n\n"
 
@@ -123,13 +127,27 @@ class LiteLLMAgent(AgentRunner):
             log_file.write(f"--- finish_reason: {finish_reason}\n\n")
             log_file.write(text)
 
-        # Extract the first ```python ... ``` block and write it to preprocess.py
+        # Extract the first ```python ... ``` block
         match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
         if match:
             code = match.group(1).rstrip()
+            
+            # Fix name field to ensure consistency
+            code = re.sub(
+                r'name\s*=\s*"[^"]*"',
+                'name = "lite_llm_agent"',
+                code
+            )
+            
+            # Save to iteration-specific file
+            iteration_file = iterations_dir / f"preprocess_iter_{iteration + 1}.py"
+            iteration_file.write_text(code + "\n", encoding="utf-8")
+            print(f"[lite_llm_agent] Saved iteration {iteration + 1} to: {iteration_file}")
+            
+            # Also update the main preprocess.py (for compatibility)
             preprocess_path = _AGENT_DIR / "preprocess.py"
             preprocess_path.write_text(code + "\n", encoding="utf-8")
-            print(f"[lite_llm_agent] preprocess.py updated ({len(code.splitlines())} lines).")
+            print(f"[lite_llm_agent] Updated preprocess.py ({len(code.splitlines())} lines).")
         else:
             print("[lite_llm_agent] Warning: no ```python``` block found in response — preprocess.py unchanged.")
 
