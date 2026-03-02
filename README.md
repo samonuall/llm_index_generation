@@ -242,3 +242,21 @@ Agents can create any additional files within their own folder.
 - Agent code stays entirely within `src/agents/<name>/`
 - `data/` is generated; run `get_data.py` to populate it
 - Update `src/agents/baseline_results.json` whenever baseline numbers change (e.g. after re-running with a different dataset size); `AgentRunner` loads this file at runtime
+
+## Quick Run
+
+Download datasets
+```
+for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
+  echo "Downloading $split..."
+  uv run python -m src.evaluation.scripts.get_data_extended --split $split
+done
+```
+
+Baselines
+```
+for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
+  echo "Evaluating baseline on $split..."
+  uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline --split $split
+done
+```
