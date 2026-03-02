@@ -260,3 +260,53 @@ for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval leg
   uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline --split $split
 done
 ```
+
+# Evaluation Scripts
+
+Utilities for managing, visualizing, and cleaning up agent evaluation artifacts.
+
+## Overview
+
+These scripts help you manage the full lifecycle of agent experiments:
+- **Run evaluations** → `test_preprocessing_split.py`
+- **Visualize results** → `plot_iterations.py`
+- **Archive code** → `archive_agent_iterations.py`
+- **Clean up artifacts** → `cleanup_iterations.py`
+
+---
+
+## Scripts
+
+### 1. `test_preprocessing_split.py`
+
+**Purpose:** Main evaluation harness for testing preprocessing agents on CRUMB benchmark splits.
+
+**Features:**
+- Runs BM25 retrieval with preprocessed documents
+- Computes quick metrics (Recall@k, nDCG@k)
+- Calls official CRUMB eval library for benchmark metrics
+- Tracks iterations when called from agent runner
+- Saves multiple output formats (JSON, CRUMB JSONL, query results)
+
+**Usage:**
+
+```bash
+# Basic evaluation
+python -m src.evaluation.scripts.test_preprocessing_split \
+  --agent baseline \
+  --split paper_retrieval
+
+# With comparison to previous runs
+python -m src.evaluation.scripts.test_preprocessing_split \
+  --agent lite_llm_agent \
+  --split code_retrieval \
+  --compare
+
+# Custom top-k
+python -m src.evaluation.scripts.test_preprocessing_split \
+  --agent baseline \
+  --split tip_of_the_tongue \
+  --top-k 20
+
+# List available splits
+python -m src.evaluation.scripts.test_preprocessing_split --agent baseline
