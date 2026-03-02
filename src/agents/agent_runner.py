@@ -39,38 +39,6 @@ class AgentRunner(ABC):
         print(f"  nDCG@10    : {self.baseline_results['ndcg']:.4f}")
         self.on_baseline_complete(self.baseline_results)
 
-        # for i in range(n_loops):
-        #     print(f"\n{'#'*60}")
-        #     print(f"# Iteration {i + 1} / {n_loops}")
-        #     print(f"{'#'*60}")
-
-        #     prompt = None
-        #     if not preprocess_path.read_text(encoding="utf-8").strip():
-        #         print("[agent_runner] preprocess.py is empty, skipping eval.")
-        #         eval_results = None
-        #         prompt = "[agent_runner] No eval results available, using empty prompt."
-        #     else:
-        #         try:
-        #             eval_results = self.run_eval()
-        #             # Flatten results for prompt builder (expects old format)
-        #             if eval_results:
-        #                 flattened = {
-        #                     "top_k": eval_results["config"]["top_k"],
-        #                     "recall_at_k": eval_results["metrics"]["recall_at_100"],
-        #                     "ndcg": eval_results["metrics"]["ndcg_at_10"],
-        #                     "n_queries": eval_results["config"]["n_queries"],
-        #                     "n_chunks": eval_results["config"]["n_chunks"],
-        #                     "n_docs": eval_results["config"]["n_docs"],
-        #                     "chunks_per_doc": eval_results["config"]["chunks_per_doc"],
-        #                 }
-        #                 eval_results = flattened
-        #         except Exception as e:
-        #             print(f"[agent_runner] Eval failed (iteration {i + 1}): {e}")
-        #             eval_results = None
-        #             prompt = f"[agent_runner] Eval failed with error: {e}"
-            
-        #     self.call_llm(prompt=prompt, iteration=i)
-
         for i in range(n_loops):
             print(f"\n{'#'*60}")
             print(f"# Iteration {i + 1} / {n_loops}")
@@ -84,7 +52,7 @@ class AgentRunner(ABC):
                 prompt = "[agent_runner] No eval results available. Please write a preprocess() function that chunks documents."
             else:
                 try:
-                    raw_results = self.run_eval()
+                    raw_results = self.run_eval(iteration=i)
                     # Flatten results for prompt builder (expects old format)
                     eval_results = {
                         "top_k": raw_results["config"]["top_k"],
@@ -120,10 +88,13 @@ class AgentRunner(ABC):
             except Exception as e:
                 print(f"[agent_runner] Final eval failed: {e}")
 
-    def run_eval(self) -> dict:
+    def run_eval(self, iteration: int = None) -> dict:  # ADD iteration parameter
         """
         Dynamically load Preprocessor from the agent's preprocess.py and run
         the static evaluate() harness. Returns the results dict.
+        
+        Args:
+            iteration: Current iteration number (0-indexed), used for file naming
         """
         eval_scripts_dir = _PROJECT_ROOT / "src" / "evaluation" / "scripts"
         eval_dir = _PROJECT_ROOT / "src" / "evaluation"
@@ -147,7 +118,16 @@ class AgentRunner(ABC):
         spec.loader.exec_module(module)  # type: ignore[union-attr]
 
         preprocessor = module.Preprocessor()
-        return evaluate(preprocessor, split=self.split, top_k=100, save_results=True)
+        
+        # Pass iteration number and enable tracking
+        return evaluate(
+            preprocessor,
+            split=self.split,
+            top_k=100,
+            save_results=True,
+            iteration=iteration,      # NEW: pass iteration for file naming
+            track_iterations=True     # NEW: enable iteration summary
+        )
 
     def on_baseline_complete(self, baseline_results: dict) -> None:
         """Called after baseline eval; override to inject baseline numbers into system instruction."""
