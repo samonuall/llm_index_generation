@@ -310,3 +310,14 @@ python -m src.evaluation.scripts.test_preprocessing_split \
 
 # List available splits
 python -m src.evaluation.scripts.test_preprocessing_split --agent baseline
+
+
+
+Quick Reference
+Task	Command
+Download data	python -m src.evaluation.scripts.get_data_extended --split <split>
+Evaluate agent	python -m src.evaluation.scripts.test_preprocessing_split --agent <agent> --split <split>
+Plot iterations	python -m src.evaluation.scripts.plot_iterations --agent <agent> --split <split>
+Archive code	python -m src.evaluation.scripts.archive_agent_iterations --agent <agent> --clear
+Clean results	python -m src.evaluation.scripts.cleanup_iterations --split <split> --agent <agent>
+Compare all	python -m src.evaluation.scripts.aggregate_results
