@@ -26,7 +26,7 @@ if str(_SRC_AGENTS_DIR) not in sys.path:
 
 from agent_runner import AgentRunner  # type: ignore
 
-_MODEL = "gemini-3-flash-preview"
+_MODEL = "gemini-2.0-flash"
 
 
 class GeminiSdkAgent(AgentRunner):
