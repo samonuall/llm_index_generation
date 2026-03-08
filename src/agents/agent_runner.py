@@ -19,9 +19,10 @@ _PROJECT_ROOT = pathlib.Path(__file__).parents[2]
 
 
 class AgentRunner(ABC):
-    agent_name: str  # set by subclass
-    baseline_results: dict | None = None  # set before first agent loop
-    _system_instruction: str = ""  # set by subclass, can be updated after baseline eval
+    agent_name: str
+    split: str = "tip_of_the_tongue"  # ADD THIS LINE - default split
+    baseline_results: dict | None = None
+    _system_instruction: str = ""
 
     def run(self, n_loops: int) -> None:
         """Main eval-improve loop."""
@@ -44,20 +45,34 @@ class AgentRunner(ABC):
             print(f"{'#'*60}")
 
             prompt = None
+            eval_results = None
+            
             if not preprocess_path.read_text(encoding="utf-8").strip():
                 print("[agent_runner] preprocess.py is empty, skipping eval.")
-                eval_results = None
-                prompt = "[agent_runner] No eval results available, using empty prompt."
+                prompt = "[agent_runner] No eval results available. Please write a preprocess() function that chunks documents."
             else:
                 try:
-                    eval_results = self.run_eval()
+                    raw_results = self.run_eval(iteration=i)
+                    # Flatten results for prompt builder (expects old format)
+                    eval_results = {
+                        "top_k": raw_results["config"]["top_k"],
+                        "recall_at_k": raw_results["metrics"]["recall_at_100"],
+                        "ndcg": raw_results["metrics"]["ndcg_at_10"],
+                        "n_queries": raw_results["config"]["n_queries"],
+                        "n_chunks": raw_results["config"]["n_chunks"],
+                        "n_docs": raw_results["config"]["n_docs"],
+                        "chunks_per_doc": raw_results["config"]["chunks_per_doc"],
+                    }
+                    prompt = self.build_prompt(iteration=i, eval_results=eval_results)
                 except Exception as e:
                     print(f"[agent_runner] Eval failed (iteration {i + 1}): {e}")
-                    eval_results = None
-                    prompt = f"[agent_runner] Eval failed with error: {e}, current implementation:\n{preprocess_path.read_text(encoding='utf-8')}"
-
-            if eval_results:
-                prompt = self.build_prompt(iteration=i, eval_results=eval_results)
+                    import traceback
+                    traceback.print_exc()
+                    prompt = f"[agent_runner] Eval failed with error: {e}\nPlease fix the preprocess() function."
+            
+            # Safety check - ensure prompt is never None
+            if prompt is None:
+                prompt = f"[agent_runner] Iteration {i+1}: No prompt generated. Please write preprocessing code."
             
             self.call_llm(prompt=prompt, iteration=i)
 
@@ -73,10 +88,13 @@ class AgentRunner(ABC):
             except Exception as e:
                 print(f"[agent_runner] Final eval failed: {e}")
 
-    def run_eval(self) -> dict:
+    def run_eval(self, iteration: int = None) -> dict:  # ADD iteration parameter
         """
         Dynamically load Preprocessor from the agent's preprocess.py and run
         the static evaluate() harness. Returns the results dict.
+        
+        Args:
+            iteration: Current iteration number (0-indexed), used for file naming
         """
         eval_scripts_dir = _PROJECT_ROOT / "src" / "evaluation" / "scripts"
         eval_dir = _PROJECT_ROOT / "src" / "evaluation"
@@ -87,7 +105,7 @@ class AgentRunner(ABC):
                 sys.path.insert(0, p)
 
         # Import evaluate() from the static harness
-        from test_preprocessing import evaluate  # type: ignore
+        from test_preprocessing_split import evaluate
 
         # Reload preprocess.py fresh each iteration so code changes take effect
         preprocess_path = (
@@ -100,7 +118,16 @@ class AgentRunner(ABC):
         spec.loader.exec_module(module)  # type: ignore[union-attr]
 
         preprocessor = module.Preprocessor()
-        return evaluate(preprocessor, top_k=100)
+        
+        # Pass iteration number and enable tracking
+        return evaluate(
+            preprocessor,
+            split=self.split,
+            top_k=100,
+            save_results=True,
+            iteration=iteration,      # NEW: pass iteration for file naming
+            track_iterations=True     # NEW: enable iteration summary
+        )
 
     def on_baseline_complete(self, baseline_results: dict) -> None:
         """Called after baseline eval; override to inject baseline numbers into system instruction."""

@@ -2,7 +2,7 @@
 main.py – CLI entry point for LLM-driven preprocessing agents.
 
 Usage:
-    uv run python main.py --agent gemini_sdk --loops 5
+    uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval
 """
 
 import argparse
@@ -23,6 +23,12 @@ def main() -> None:
         type=int,
         default=3,
         help="Number of eval+improve loops (default: 3)",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="tip_of_the_tongue",
+        help="CRUMB split name (default: tip_of_the_tongue)",
     )
     parser.add_argument(
         "--no-query-text",
@@ -53,6 +59,8 @@ def main() -> None:
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 
+    # Set the split on the agent
+    agent.split = args.split
     agent.run(n_loops=args.loops)
 
 
