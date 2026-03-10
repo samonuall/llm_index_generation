@@ -1,0 +1,13 @@
+analysis_model: "openai/gpt-4o-mini"
+analysis_temperature: 0.3
+code_model: "openai/gpt-4o"
+code_temperature: 0.7
+api_base: "https://thekeymaker.umass.edu/"
+
+server_port: 8765
+server_persist_dir: ".bm25_cache"
+
+max_hypotheses: 4
+recall_improvement_threshold: 0.05
+analysis_max_turns: 8
+bash_timeout_seconds: 30
