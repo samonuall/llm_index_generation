@@ -66,7 +66,7 @@ def _load_data(split: str = "tip_of_the_tongue"):
             q = json.loads(line)
             queries.append(EvalQuery(
                 query_id=q["query_id"],
-                query_text=q["query_text"],
+                query_text=q.get("query_text") or q.get("query_content", ""),
                 relevant_doc_ids=q["relevant_doc_ids"],
             ))
 
@@ -133,6 +133,33 @@ class AnalysisCodeAgent(AgentRunner):
                 self._server_process.kill()
             print("[agent] BM25 server stopped.")
 
+    # --- Per-query enrichment ---
+
+    def _enrich_eval_results(
+        self, raw_results: dict, queries: list, client
+    ) -> dict:
+        """
+        The eval harness returns metrics but no per-query hit/rank data.
+        Enrich raw_results with query_results using the BM25 server's 'current' index.
+        """
+        from .eval_utils import run_subset_eval
+
+        eval_summary = run_subset_eval("current", queries, client, top_k=100)
+
+        query_results = []
+        for pq, q in zip(eval_summary.per_query, queries):
+            query_results.append({
+                "query_id": pq.query_id,
+                "query_text": q.query_text,
+                "hit": pq.hit_at_100,
+                "rank": pq.rank,
+                "relevant_doc_ids": q.relevant_doc_ids,
+                "retrieved_doc_ids": pq.retrieved_doc_ids,
+            })
+
+        raw_results["query_results"] = query_results
+        return raw_results
+
     # --- Preprocessing helper ---
 
     def _preprocess_with_current_code(self, documents: list, current_code: str) -> list:
@@ -193,6 +220,9 @@ class AnalysisCodeAgent(AgentRunner):
                 "query_ids_to_test": h.query_ids_to_test,
                 "falsifying_condition": h.falsifying_condition,
                 "test_results": {
+                    "hypothesis_recall_100": r.hypothesis_recall_100,
+                    "baseline_recall_100": r.baseline_recall_100,
+                    "delta_recall_100": r.delta_recall_100,
                     "hypothesis_recall_10": r.hypothesis_recall_10,
                     "baseline_recall_10": r.baseline_recall_10,
                     "delta_recall_10": r.delta_recall_10,
@@ -244,16 +274,20 @@ class AnalysisCodeAgent(AgentRunner):
         analysis_agent = AnalysisAgent(self._config)
         code_agent = CodeAgent(self._config)
         max_hypotheses = self._config.get("max_hypotheses", 4)
+        all_past_hypotheses: list[dict] = []  # track across loops
+
+        # Track globally best code + recall@100 (from harness eval) across all loops
+        best_recall_100: float = baseline_results.get("recall_at_k", 0.0)
+        best_code: str = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
 
         for i in range(n_loops):
             print(f"\n{'#'*60}")
             print(f"# Loop {i + 1} / {n_loops}")
             print(f"{'#'*60}")
 
-            # Full harness eval
+            # Full harness eval — authoritative recall@100 for this loop's starting point
             try:
                 raw_results = self.run_eval(iteration=i * 2)
-                # Save eval results
                 eval_log = _AGENT_DIR / "logs" / f"iteration_{i}_eval.json"
                 eval_log.parent.mkdir(exist_ok=True)
                 eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
@@ -262,6 +296,11 @@ class AnalysisCodeAgent(AgentRunner):
                 import traceback
                 traceback.print_exc()
                 continue
+
+            # Anchor: harness recall@100 at the start of this loop
+            loop_start_recall_100 = raw_results["metrics"]["recall_at_100"]
+            print(f"[agent] Loop {i+1} starting recall@100: {loop_start_recall_100:.4f} "
+                  f"(global best: {best_recall_100:.4f})")
 
             current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
 
@@ -275,6 +314,17 @@ class AnalysisCodeAgent(AgentRunner):
                 print(f"[agent] Index build failed: {e}")
                 continue
 
+            # Enrich eval results with per-query data from BM25 server
+            print("[agent] Enriching eval results with per-query data ...")
+            try:
+                raw_results = self._enrich_eval_results(raw_results, queries, self._client)
+                print(f"[agent] Enriched with {len(raw_results.get('query_results', []))} query results.")
+            except Exception as e:
+                print(f"[agent] Enrichment failed: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
             # Analysis agent
             print("[agent] Running analysis agent ...")
             try:
@@ -285,6 +335,7 @@ class AnalysisCodeAgent(AgentRunner):
                     documents=documents,
                     queries=queries,
                     client=self._client,
+                    split=self.split,
                 )
                 self._log_analysis(i, analysis_result)
             except Exception as e:
@@ -296,7 +347,10 @@ class AnalysisCodeAgent(AgentRunner):
             # Hypothesis generation
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
             hypotheses = code_agent.generate_hypotheses(
-                analysis_result.summary, current_code, n=max_hypotheses
+                analysis_result.summary,
+                current_code,
+                n=max_hypotheses,
+                past_hypotheses=all_past_hypotheses if all_past_hypotheses else None,
             )
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")
 
@@ -304,7 +358,8 @@ class AnalysisCodeAgent(AgentRunner):
                 print("[agent] No hypotheses generated — skipping.")
                 continue
 
-            # Hypothesis testing
+            # Hypothesis testing — compare each against the BM25 server "current" index
+            # (consistent within-loop comparison; delta is relative to loop_start_recall_100 via server proxy)
             print("[agent] Testing hypotheses ...")
             hypothesis_results = []
             for h in hypotheses:
@@ -315,29 +370,65 @@ class AnalysisCodeAgent(AgentRunner):
                 hypothesis_results.append(result)
             self._log_hypotheses(i, hypothesis_results)
 
-            # Final code generation
-            proven = [r for r in hypothesis_results if r.proven]
-            print(f"[agent] {len(proven)} / {len(hypothesis_results)} hypotheses proven.")
+            # Track all tested hypotheses for future loops
+            for r in hypothesis_results:
+                all_past_hypotheses.append({
+                    "id": r.hypothesis.id,
+                    "description": r.hypothesis.description,
+                    "delta_recall_100": r.delta_recall_100,
+                    "delta_recall_10": r.delta_recall_10,
+                    "delta_ndcg_10": r.delta_ndcg_10,
+                    "proven": r.proven,
+                    "notes": r.notes,
+                })
 
-            if proven:
-                print("[agent] Generating final code from proven hypotheses ...")
-                final_code = code_agent.generate_final_code(
-                    analysis_result.summary, proven, current_code
-                )
-                if final_code:
-                    self._log_final_code(i, final_code)
-                    self._write_preprocess(final_code)
-                else:
-                    print("[agent] Final code generation failed — preprocess.py unchanged.")
+            # Pick the single best hypothesis by recall@100 on the BM25 server.
+            # Always adopt the best if it improves over the current loop's starting point.
+            valid = [r for r in hypothesis_results if not r.error]
+            if not valid:
+                print("[agent] All hypotheses errored — preprocess.py unchanged.")
+                continue
+
+            best_hyp = max(valid, key=lambda r: r.hypothesis_recall_100)
+            print(f"[agent] Best hypothesis: {best_hyp.hypothesis.id} "
+                  f"recall@100={best_hyp.hypothesis_recall_100:.4f} "
+                  f"(Δ{best_hyp.delta_recall_100:+.4f} vs server current, "
+                  f"server baseline={best_hyp.baseline_recall_100:.4f})")
+
+            if best_hyp.delta_recall_100 > 0:
+                # Adopt directly — no synthesis step, use the hypothesis code as-is
+                print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
+                self._log_final_code(i, best_hyp.hypothesis.code)
+                self._write_preprocess(best_hyp.hypothesis.code)
+
+                # Update global best if this loop's harness recall confirms improvement
+                # (We optimistically assume server delta maps to harness improvement;
+                # the final eval will confirm. Update global best conservatively.)
+                new_recall_estimate = loop_start_recall_100 + best_hyp.delta_recall_100
+                if new_recall_estimate > best_recall_100:
+                    best_recall_100 = new_recall_estimate
+                    best_code = best_hyp.hypothesis.code
+                    print(f"[agent] Global best updated → estimated recall@100≈{best_recall_100:.4f}")
             else:
-                print("[agent] No proven hypotheses — preprocess.py unchanged.")
+                print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
+
+        # Restore globally best code before final eval
+        # (guards against a later loop degrading what an earlier loop achieved)
+        current_final_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
+        if best_code != current_final_code:
+            print(f"\n[agent] Restoring globally best code (estimated recall@100≈{best_recall_100:.4f})")
+            self._write_preprocess(best_code)
 
         # Final eval
         print(f"\n{'#'*60}")
         print(f"# Final eval (after {n_loops} loop{'s' if n_loops != 1 else ''})")
         print(f"{'#'*60}")
         try:
-            self.run_eval()
+            final_results = self.run_eval()
+            final_recall = final_results["metrics"]["recall_at_100"]
+            baseline_recall = baseline_results.get("recall_at_k", 0.0)
+            print(f"\n[agent] Improvement: recall@100 {baseline_recall:.4f} → {final_recall:.4f} "
+                  f"({final_recall - baseline_recall:+.4f})")
         except Exception as e:
             print(f"[agent] Final eval failed: {e}")
 

@@ -50,6 +50,7 @@ class AnalysisAgent:
         documents: list,
         queries: list,
         client,
+        split: str = "tip_of_the_tongue",
     ) -> AnalysisResult:
         """Run multi-turn analysis loop. Returns AnalysisResult with summary."""
 
@@ -62,6 +63,7 @@ class AnalysisAgent:
             baseline_results=baseline_results,
             current_code=current_code,
             candidates=candidates,
+            split=split,
         )
 
         messages = [
@@ -230,6 +232,7 @@ class AnalysisAgent:
         baseline_results: dict,
         current_code: str,
         candidates: dict,
+        split: str = "tip_of_the_tongue",
     ) -> str:
         """Build the initial user message with all context."""
 
@@ -296,7 +299,7 @@ class AnalysisAgent:
         baseline_recall = baseline_results.get("recall_at_k", 0)
         baseline_ndcg = baseline_results.get("ndcg", 0)
 
-        data_dir = _PROJECT_ROOT / "data"
+        data_dir = _PROJECT_ROOT / "data" / split
         server = self._server_url
 
         return (

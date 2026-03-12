@@ -30,6 +30,9 @@ class Hypothesis:
 @dataclass
 class HypothesisResult:
     hypothesis: Hypothesis
+    hypothesis_recall_100: float = 0.0
+    baseline_recall_100: float = 0.0
+    delta_recall_100: float = 0.0
     hypothesis_recall_10: float = 0.0
     baseline_recall_10: float = 0.0
     delta_recall_10: float = 0.0
@@ -53,11 +56,33 @@ class CodeAgent:
         self._system_prompt = system_path.read_text(encoding="utf-8")
 
     def generate_hypotheses(
-        self, analysis_summary: str, current_code: str, n: int = 4
+        self,
+        analysis_summary: str,
+        current_code: str,
+        n: int = 4,
+        past_hypotheses: list[dict] | None = None,
     ) -> list[Hypothesis]:
         """Single LLM call to generate N hypotheses. Output JSON inside <hypotheses>...</hypotheses> tags."""
 
         dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+
+        # Build past attempts section
+        past_section = ""
+        if past_hypotheses:
+            lines = []
+            for ph in past_hypotheses:
+                lines.append(
+                    f"- **{ph['id']}: {ph['description']}** → "
+                    f"delta_recall@100={ph['delta_recall_100']:+.4f}, "
+                    f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
+                    f"proven={ph['proven']}. {ph.get('notes', '')}"
+                )
+            past_section = (
+                "\n## Previously Tested Hypotheses (DO NOT repeat these)\n"
+                + "\n".join(lines)
+                + "\n\nLearn from what worked and what didn't. "
+                "Do NOT regenerate hypotheses that are similar to failed ones above.\n"
+            )
 
         prompt = f"""## Analysis Summary
 {analysis_summary}
@@ -69,18 +94,26 @@ class CodeAgent:
 
 ## Dataset Info
 {dataset_info}
-
+{past_section}
 Generate exactly {n} hypotheses to improve the preprocessing code.
 Each hypothesis must be a complete, working preprocess.py implementation.
 
-Output your hypotheses as a JSON array inside <hypotheses>...</hypotheses> tags.
-Each hypothesis object must have these fields:
-- "id": "H1", "H2", etc.
-- "description": one-line summary of the change
-- "rationale": why this should help based on the analysis
-- "code": complete Python code for preprocess.py (must define class Preprocessor(BasePreprocessor) with preprocess method)
-- "query_ids_to_test": list of query_ids most likely affected (from the analysis), at least 3
-- "falsifying_condition": what would disprove this hypothesis
+IMPORTANT NOTES:
+- The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
+- The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
+- Naive paragraph splitting hurts BM25 because short chunks lose term co-occurrence. If chunking, use overlapping windows or keep chunks substantial (200+ words).
+
+Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
+
+### H1: <description>
+Rationale: <rationale>
+Query IDs: <comma-separated query_ids>
+Falsifying: <condition>
+```python
+<complete preprocess.py code>
+```
+
+Repeat for H2, H3, H4.
 
 The code MUST start with the standard imports:
 ```python
@@ -112,28 +145,27 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             print(f"[code_agent] Hypothesis generation failed: {e}")
             return []
 
-        # Parse hypotheses from <hypotheses>...</hypotheses> tags
-        match = re.search(r"<hypotheses>(.*?)</hypotheses>", text, re.DOTALL)
-        if not match:
-            # Try parsing the whole thing as JSON
-            match = re.search(r"\[.*\]", text, re.DOTALL)
-            if not match:
-                print("[code_agent] No hypotheses found in response")
-                return []
+        # Parse hypotheses — try markdown blocks first (our default format), then JSON
+        raw = self._parse_hypotheses_blocks(text)
+        if raw is None:
+            raw = self._parse_hypotheses_json(text)
 
-        try:
-            raw_text = match.group(1) if "<hypotheses>" in (match.group(0) or "") else match.group(0)
-            raw = json.loads(raw_text)
-        except json.JSONDecodeError as e:
-            print(f"[code_agent] JSON parse error: {e}. Retrying...")
-            # Retry once with error correction
+        if raw is None:
+            # Retry with explicit instructions
+            print("[code_agent] Parse failed. Retrying with structured format...")
             messages.append({"role": "assistant", "content": text})
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        f"JSON parse error: {e}. Please output the hypotheses again "
-                        "as valid JSON inside <hypotheses>...</hypotheses> tags."
+                        "Could not parse hypotheses. Please output each hypothesis "
+                        "as a SEPARATE block using this exact format:\n\n"
+                        "### H1: <description>\n"
+                        "Rationale: <rationale>\n"
+                        "Query IDs: <comma-separated query_ids>\n"
+                        "Falsifying: <condition>\n"
+                        "```python\n<complete preprocess.py code>\n```\n\n"
+                        "Repeat for H2, H3, H4."
                     ),
                 }
             )
@@ -146,14 +178,15 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                     api_base=self._api_base,
                 )
                 text2 = response.choices[0].message.content or ""
-                match2 = re.search(r"<hypotheses>(.*?)</hypotheses>", text2, re.DOTALL)
-                if match2:
-                    raw = json.loads(match2.group(1))
-                else:
-                    print("[code_agent] Retry also failed. Returning empty.")
-                    return []
-            except Exception:
-                return []
+                raw = self._parse_hypotheses_blocks(text2)
+                if raw is None:
+                    raw = self._parse_hypotheses_json(text2)
+            except Exception as e:
+                print(f"[code_agent] Retry failed: {e}")
+
+        if not raw:
+            print("[code_agent] No hypotheses parsed. Returning empty.")
+            return []
 
         hypotheses = []
         for h in raw[:n]:
@@ -170,6 +203,71 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
 
         return hypotheses
 
+    def _parse_hypotheses_json(self, text: str) -> list[dict] | None:
+        """Try to parse hypotheses from <hypotheses>JSON</hypotheses> tags."""
+        match = re.search(r"<hypotheses>(.*?)</hypotheses>", text, re.DOTALL)
+        if not match:
+            match = re.search(r"\[.*\]", text, re.DOTALL)
+            if not match:
+                return None
+        try:
+            raw_text = match.group(1) if "<hypotheses>" in match.group(0) else match.group(0)
+            return json.loads(raw_text)
+        except json.JSONDecodeError as e:
+            print(f"[code_agent] JSON parse error: {e}")
+            return None
+
+    def _parse_hypotheses_blocks(self, text: str) -> list[dict] | None:
+        """Parse hypotheses from markdown blocks: ### H1: desc + ```python code```."""
+        # Find all hypothesis headers
+        header_pattern = r"###\s+(H\d+)\s*:\s*(.+?)(?:\n|$)"
+        code_pattern = r"```python\s*\n(.*?)```"
+
+        headers = list(re.finditer(header_pattern, text))
+        codes = list(re.finditer(code_pattern, text, re.DOTALL))
+
+        if not headers or not codes:
+            return None
+
+        results = []
+        for i, header in enumerate(headers):
+            h_id = header.group(1)
+            desc = header.group(2).strip()
+            # Find the code block that follows this header
+            header_end = header.end()
+            next_header_start = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+
+            code = None
+            for c in codes:
+                if header_end <= c.start() < next_header_start:
+                    code = c.group(1).strip()
+                    break
+
+            if not code:
+                continue
+
+            # Extract rationale and query_ids from text between header and code
+            between = text[header_end:next_header_start]
+            rationale_match = re.search(r"Rationale:\s*(.+?)(?:\n|$)", between)
+            qids_match = re.search(r"Query IDs?:\s*(.+?)(?:\n|$)", between)
+            falsify_match = re.search(r"Falsif(?:ying|ication):\s*(.+?)(?:\n|$)", between)
+
+            query_ids = []
+            if qids_match:
+                # Parse comma-separated query IDs
+                query_ids = [q.strip().strip("[]\"'") for q in qids_match.group(1).split(",")]
+
+            results.append({
+                "id": h_id,
+                "description": desc,
+                "rationale": rationale_match.group(1).strip() if rationale_match else "",
+                "code": code,
+                "query_ids_to_test": query_ids,
+                "falsifying_condition": falsify_match.group(1).strip() if falsify_match else "",
+            })
+
+        return results if results else None
+
     def test_hypothesis(
         self,
         hypothesis: Hypothesis,
@@ -185,14 +283,10 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
         index_name = f"hyp_{hypothesis.id}"
 
         try:
-            # Filter queries to test
+            # Always test on all queries for reliable delta measurement.
+            # The query_ids_to_test are logged but not used for filtering,
+            # since testing only on failure cases yields 0/0 comparisons.
             test_queries = queries
-            if hypothesis.query_ids_to_test:
-                test_qids = set(hypothesis.query_ids_to_test)
-                filtered = [q for q in queries if q.query_id in test_qids]
-                if len(filtered) >= 3:
-                    test_queries = filtered
-                # If fewer than 3 matching queries, use all
 
             # Load hypothesis preprocessor from code string
             preprocessor = load_preprocessor_from_code(hypothesis.code)
@@ -207,30 +301,42 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             # Run subset eval on current index for comparison
             current_eval = run_subset_eval("current", test_queries, client)
 
+            # recall@100 for proven decision (more granular)
+            result.hypothesis_recall_100 = hyp_eval.recall_at_100
+            result.baseline_recall_100 = current_eval.recall_at_100
+            result.delta_recall_100 = hyp_eval.recall_at_100 - current_eval.recall_at_100
+
+            # recall@10 and nDCG@10 for info
             result.hypothesis_recall_10 = hyp_eval.recall_at_10
             result.baseline_recall_10 = current_eval.recall_at_10
             result.delta_recall_10 = hyp_eval.recall_at_10 - current_eval.recall_at_10
             result.delta_ndcg_10 = hyp_eval.ndcg_at_10 - current_eval.ndcg_at_10
-            result.proven = result.delta_recall_10 >= self._recall_threshold
+
+            # Proven if recall@100 improves (more granular than @10)
+            result.proven = result.delta_recall_100 >= self._recall_threshold
 
             # Build notes
-            improved = sum(
+            improved_100 = sum(
                 1
                 for h_q, c_q in zip(hyp_eval.per_query, current_eval.per_query)
-                if h_q.hit_at_10 and not c_q.hit_at_10
+                if h_q.hit_at_100 and not c_q.hit_at_100
             )
-            regressed = sum(
+            regressed_100 = sum(
                 1
                 for h_q, c_q in zip(hyp_eval.per_query, current_eval.per_query)
-                if c_q.hit_at_10 and not h_q.hit_at_10
+                if c_q.hit_at_100 and not h_q.hit_at_100
             )
             result.notes = (
-                f"Improved {improved}, regressed {regressed} of {len(test_queries)} test queries"
+                f"@100: improved {improved_100}, regressed {regressed_100} of "
+                f"{len(test_queries)} queries"
             )
 
             print(
-                f"[code_agent] {hypothesis.id}: delta_recall@10={result.delta_recall_10:+.4f} "
-                f"delta_ndcg@10={result.delta_ndcg_10:+.4f} proven={result.proven}"
+                f"[code_agent] {hypothesis.id}: "
+                f"delta_recall@100={result.delta_recall_100:+.4f} "
+                f"delta_recall@10={result.delta_recall_10:+.4f} "
+                f"delta_ndcg@10={result.delta_ndcg_10:+.4f} "
+                f"proven={result.proven}"
             )
 
         except Exception as e:
@@ -261,6 +367,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             h = r.hypothesis
             proven_text += f"""### {h.id}: {h.description}
 - Rationale: {h.rationale}
+- Delta recall@100: {r.delta_recall_100:+.4f}
 - Delta recall@10: {r.delta_recall_10:+.4f}
 - Delta nDCG@10: {r.delta_ndcg_10:+.4f}
 - Notes: {r.notes}

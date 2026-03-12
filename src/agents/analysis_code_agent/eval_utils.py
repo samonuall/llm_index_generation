@@ -109,6 +109,9 @@ def load_preprocessor_from_code(code: str):
         sys.path.insert(0, eval_dir)
 
     module = types.ModuleType("_hypothesis_preprocess")
-    module.__file__ = "<hypothesis>"
+    # Set __file__ to a real path so pathlib.Path(__file__).parents[2] resolves
+    # to the agents dir (matching what preprocess.py expects)
+    fake_path = str(pathlib.Path(__file__).parent / "_hypothesis_preprocess.py")
+    module.__file__ = fake_path
     exec(code, module.__dict__)
     return module.Preprocessor()
