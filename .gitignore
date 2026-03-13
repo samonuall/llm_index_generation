@@ -24,8 +24,14 @@ results/*/
 *.tmp
 *.temp
 .cache/
+.bm25_cache/
+
+# Agent iterations
+**/iterations/
 
 # Egg-info (build artifacts)
 *.egg-info/
 dist/
 build/
+
+.claude/

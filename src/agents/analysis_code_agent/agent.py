@@ -1,0 +1,436 @@
+"""
+agent.py - AnalysisCodeAgent: two-stage analysis + hypothesis-testing orchestrator.
+
+Overrides AgentRunner.run() to implement:
+1. Analysis agent investigates failures via multi-turn bash loop
+2. Code agent generates hypotheses, tests each on BM25 server, synthesizes final code
+"""
+
+from __future__ import annotations
+
+import atexit
+import json
+import subprocess
+import sys
+import time
+import pathlib
+import datetime
+
+import yaml
+from dotenv import load_dotenv
+
+_PROJECT_ROOT = pathlib.Path(__file__).parents[3]
+load_dotenv(_PROJECT_ROOT / ".env")
+_AGENT_DIR = pathlib.Path(__file__).parent
+
+# Add evaluation to path
+_EVAL_DIR = _PROJECT_ROOT / "src" / "evaluation"
+if str(_EVAL_DIR) not in sys.path:
+    sys.path.insert(0, str(_EVAL_DIR))
+
+from ..agent_runner import AgentRunner
+from .analysis_agent import AnalysisAgent
+from .code_agent import CodeAgent
+from .bm25_client import BM25Client
+
+
+def _load_config() -> dict:
+    config_path = _AGENT_DIR / "config.yaml"
+    with config_path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _load_data(split: str = "tip_of_the_tongue"):
+    """Load documents and queries from data/ directory."""
+    from schema import Document, EvalQuery
+
+    data_dir = _PROJECT_ROOT / "data" / split
+    if not data_dir.exists():
+        data_dir = _PROJECT_ROOT / "data"
+
+    docs = []
+    docs_path = data_dir / "documents.jsonl"
+    with docs_path.open(encoding="utf-8") as f:
+        for line in f:
+            d = json.loads(line)
+            docs.append(Document(
+                doc_id=d["doc_id"],
+                text=d["text"],
+                metadata=d.get("metadata", {}),
+            ))
+
+    queries = []
+    queries_path = data_dir / "queries.jsonl"
+    with queries_path.open(encoding="utf-8") as f:
+        for line in f:
+            q = json.loads(line)
+            queries.append(EvalQuery(
+                query_id=q["query_id"],
+                query_text=q.get("query_text") or q.get("query_content", ""),
+                relevant_doc_ids=q["relevant_doc_ids"],
+            ))
+
+    return docs, queries
+
+
+class AnalysisCodeAgent(AgentRunner):
+    agent_name = "analysis_code_agent"
+
+    def __init__(self) -> None:
+        self._config = _load_config()
+        self._server_process = None
+        self._client = BM25Client(
+            base_url=f"http://localhost:{self._config.get('server_port', 8765)}",
+        )
+
+    # --- AgentRunner ABC stubs (we override run() instead) ---
+
+    def build_prompt(self, iteration: int, eval_results: dict | None) -> str:
+        return ""  # not used
+
+    def call_llm(self, prompt: str, iteration: int) -> None:
+        pass  # not used
+
+    # --- Server management ---
+
+    def _ensure_server_running(self) -> None:
+        """Start the BM25 FastAPI server if not already up."""
+        if self._client.health():
+            print("[agent] BM25 server already running.")
+            return
+
+        port = self._config.get("server_port", 8765)
+        persist_dir = self._config.get("server_persist_dir", ".bm25_cache")
+        server_path = _AGENT_DIR / "bm25_server.py"
+
+        print(f"[agent] Starting BM25 server on port {port} ...")
+        self._server_process = subprocess.Popen(
+            ["uv", "run", "python", str(server_path), "--port", str(port), "--persist-dir", persist_dir],
+            cwd=str(_PROJECT_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        atexit.register(self._kill_server)
+
+        # Wait for server to be ready (up to 15s)
+        for i in range(30):
+            time.sleep(0.5)
+            if self._client.health():
+                print(f"[agent] BM25 server ready (took {(i+1)*0.5:.1f}s).")
+                return
+
+        raise RuntimeError(
+            f"BM25 server failed to start after 15s. "
+            f"Check: uv run python {server_path} --port {port}"
+        )
+
+    def _kill_server(self) -> None:
+        if self._server_process and self._server_process.poll() is None:
+            self._server_process.terminate()
+            try:
+                self._server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._server_process.kill()
+            print("[agent] BM25 server stopped.")
+
+    # --- Per-query enrichment ---
+
+    def _enrich_eval_results(
+        self, raw_results: dict, queries: list, client
+    ) -> dict:
+        """
+        The eval harness returns metrics but no per-query hit/rank data.
+        Enrich raw_results with query_results using the BM25 server's 'current' index.
+        """
+        from .eval_utils import run_subset_eval
+
+        eval_summary = run_subset_eval("current", queries, client, top_k=100)
+
+        query_results = []
+        for pq, q in zip(eval_summary.per_query, queries):
+            query_results.append({
+                "query_id": pq.query_id,
+                "query_text": q.query_text,
+                "hit": pq.hit_at_100,
+                "rank": pq.rank,
+                "relevant_doc_ids": q.relevant_doc_ids,
+                "retrieved_doc_ids": pq.retrieved_doc_ids,
+            })
+
+        raw_results["query_results"] = query_results
+        return raw_results
+
+    # --- Preprocessing helper ---
+
+    def _preprocess_with_current_code(self, documents: list, current_code: str) -> list:
+        """Load preprocessor from current code and run it on documents."""
+        from .eval_utils import load_preprocessor_from_code
+        preprocessor = load_preprocessor_from_code(current_code)
+        return preprocessor.preprocess(documents)
+
+    # --- Logging ---
+
+    def _log_analysis(self, iteration: int, analysis_result) -> None:
+        logs_dir = _AGENT_DIR / "logs"
+        logs_dir.mkdir(exist_ok=True)
+        timestamp = datetime.datetime.now().isoformat(timespec="seconds")
+
+        # Full conversation log
+        log_path = logs_dir / f"iteration_{iteration}_analysis.log"
+        with log_path.open("w", encoding="utf-8") as f:
+            f.write(f"=== Analysis Agent | Iteration {iteration} | {timestamp} ===\n\n")
+
+            # Context summary
+            n_turns = 0
+            for msg in analysis_result.conversation:
+                if msg["role"] == "system":
+                    continue
+                elif msg["role"] == "user" and n_turns == 0:
+                    f.write("--- CONTEXT SUMMARY ---\n")
+                    f.write(msg["content"][:500] + "\n...\n\n")
+                    n_turns += 1
+                elif msg["role"] == "assistant":
+                    f.write(f"--- TURN {n_turns} ---\n")
+                    f.write(f"[ASSISTANT]: {msg['content']}\n\n")
+                    n_turns += 1
+                elif msg["role"] == "user":
+                    f.write(f"{msg['content']}\n\n")
+
+            f.write("--- FINAL SUMMARY ---\n")
+            f.write(analysis_result.summary)
+
+        # Summary-only file
+        summary_path = logs_dir / f"iteration_{iteration}_analysis_summary.txt"
+        summary_path.write_text(analysis_result.summary, encoding="utf-8")
+
+        print(f"[agent] Analysis log: {log_path}")
+
+    def _log_hypotheses(self, iteration: int, hypothesis_results: list) -> None:
+        logs_dir = _AGENT_DIR / "logs"
+        logs_dir.mkdir(exist_ok=True)
+
+        data = []
+        for r in hypothesis_results:
+            h = r.hypothesis
+            data.append({
+                "id": h.id,
+                "description": h.description,
+                "rationale": h.rationale,
+                "code": h.code,
+                "query_ids_to_test": h.query_ids_to_test,
+                "falsifying_condition": h.falsifying_condition,
+                "test_results": {
+                    "hypothesis_recall_100": r.hypothesis_recall_100,
+                    "baseline_recall_100": r.baseline_recall_100,
+                    "delta_recall_100": r.delta_recall_100,
+                    "hypothesis_recall_10": r.hypothesis_recall_10,
+                    "baseline_recall_10": r.baseline_recall_10,
+                    "delta_recall_10": r.delta_recall_10,
+                    "delta_ndcg_10": r.delta_ndcg_10,
+                    "proven": r.proven,
+                    "notes": r.notes,
+                    "error": r.error,
+                },
+            })
+
+        log_path = logs_dir / f"iteration_{iteration}_hypotheses.json"
+        log_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"[agent] Hypotheses log: {log_path}")
+
+    def _log_final_code(self, iteration: int, code: str) -> None:
+        logs_dir = _AGENT_DIR / "logs"
+        logs_dir.mkdir(exist_ok=True)
+        log_path = logs_dir / f"iteration_{iteration}_final_code.py"
+        log_path.write_text(code, encoding="utf-8")
+        print(f"[agent] Final code log: {log_path}")
+
+    def _write_preprocess(self, code: str) -> None:
+        preprocess_path = _AGENT_DIR / "preprocess.py"
+        preprocess_path.write_text(code + "\n", encoding="utf-8")
+        print(f"[agent] preprocess.py updated ({len(code.splitlines())} lines).")
+
+    # --- Main loop ---
+
+    def run(self, n_loops: int) -> None:
+        """Override AgentRunner.run() with analysis+hypothesis loop."""
+
+        # Load baseline results
+        baseline_path = pathlib.Path(__file__).parent.parent / "baseline_results.json"
+        print(f"\n{'#'*60}")
+        print(f"# Baseline (raw documents, no preprocessing) — from baseline_results.json")
+        print(f"{'#'*60}")
+        baseline_results = json.loads(baseline_path.read_text(encoding="utf-8"))
+        print(f"  Recall@100 : {baseline_results['recall_at_k']:.4f}")
+        print(f"  nDCG@10    : {baseline_results['ndcg']:.4f}")
+
+        # Load data
+        documents, queries = _load_data(self.split)
+        print(f"[agent] Loaded {len(documents)} documents, {len(queries)} queries.")
+
+        # Start BM25 server
+        self._ensure_server_running()
+
+        # Create sub-agents
+        analysis_agent = AnalysisAgent(self._config)
+        code_agent = CodeAgent(self._config)
+        max_hypotheses = self._config.get("max_hypotheses", 4)
+        all_past_hypotheses: list[dict] = []  # track across loops
+
+        # Track globally best code + recall@100 (from harness eval) across all loops
+        best_recall_100: float = baseline_results.get("recall_at_k", 0.0)
+        best_code: str = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
+
+        for i in range(n_loops):
+            print(f"\n{'#'*60}")
+            print(f"# Loop {i + 1} / {n_loops}")
+            print(f"{'#'*60}")
+
+            # Full harness eval — authoritative recall@100 for this loop's starting point
+            try:
+                raw_results = self.run_eval(iteration=i * 2)
+                eval_log = _AGENT_DIR / "logs" / f"iteration_{i}_eval.json"
+                eval_log.parent.mkdir(exist_ok=True)
+                eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
+            except Exception as e:
+                print(f"[agent] Eval failed (loop {i + 1}): {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+            # Anchor: harness recall@100 at the start of this loop
+            loop_start_recall_100 = raw_results["metrics"]["recall_at_100"]
+            print(f"[agent] Loop {i+1} starting recall@100: {loop_start_recall_100:.4f} "
+                  f"(global best: {best_recall_100:.4f})")
+
+            current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
+
+            # Rebuild "current" BM25 index on server
+            print("[agent] Building 'current' index on BM25 server ...")
+            try:
+                chunks = self._preprocess_with_current_code(documents, current_code)
+                self._client.build_index("current", chunks, persist=True)
+                print(f"[agent] 'current' index built with {len(chunks)} chunks.")
+            except Exception as e:
+                print(f"[agent] Index build failed: {e}")
+                continue
+
+            # Enrich eval results with per-query data from BM25 server
+            print("[agent] Enriching eval results with per-query data ...")
+            try:
+                raw_results = self._enrich_eval_results(raw_results, queries, self._client)
+                print(f"[agent] Enriched with {len(raw_results.get('query_results', []))} query results.")
+            except Exception as e:
+                print(f"[agent] Enrichment failed: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+            # Analysis agent
+            print("[agent] Running analysis agent ...")
+            try:
+                analysis_result = analysis_agent.analyze(
+                    eval_results=raw_results,
+                    baseline_results=baseline_results,
+                    current_code=current_code,
+                    documents=documents,
+                    queries=queries,
+                    client=self._client,
+                    split=self.split,
+                )
+                self._log_analysis(i, analysis_result)
+            except Exception as e:
+                print(f"[agent] Analysis failed: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+            # Hypothesis generation
+            print(f"[agent] Generating {max_hypotheses} hypotheses ...")
+            hypotheses = code_agent.generate_hypotheses(
+                analysis_result.summary,
+                current_code,
+                n=max_hypotheses,
+                past_hypotheses=all_past_hypotheses if all_past_hypotheses else None,
+            )
+            print(f"[agent] Generated {len(hypotheses)} hypotheses.")
+
+            if not hypotheses:
+                print("[agent] No hypotheses generated — skipping.")
+                continue
+
+            # Hypothesis testing — compare each against the BM25 server "current" index
+            # (consistent within-loop comparison; delta is relative to loop_start_recall_100 via server proxy)
+            print("[agent] Testing hypotheses ...")
+            hypothesis_results = []
+            for h in hypotheses:
+                print(f"[agent] Testing {h.id}: {h.description}")
+                result = code_agent.test_hypothesis(
+                    h, documents, queries, current_code, self._client
+                )
+                hypothesis_results.append(result)
+            self._log_hypotheses(i, hypothesis_results)
+
+            # Track all tested hypotheses for future loops
+            for r in hypothesis_results:
+                all_past_hypotheses.append({
+                    "id": r.hypothesis.id,
+                    "description": r.hypothesis.description,
+                    "delta_recall_100": r.delta_recall_100,
+                    "delta_recall_10": r.delta_recall_10,
+                    "delta_ndcg_10": r.delta_ndcg_10,
+                    "proven": r.proven,
+                    "notes": r.notes,
+                })
+
+            # Pick the single best hypothesis by recall@100 on the BM25 server.
+            # Always adopt the best if it improves over the current loop's starting point.
+            valid = [r for r in hypothesis_results if not r.error]
+            if not valid:
+                print("[agent] All hypotheses errored — preprocess.py unchanged.")
+                continue
+
+            best_hyp = max(valid, key=lambda r: r.hypothesis_recall_100)
+            print(f"[agent] Best hypothesis: {best_hyp.hypothesis.id} "
+                  f"recall@100={best_hyp.hypothesis_recall_100:.4f} "
+                  f"(Δ{best_hyp.delta_recall_100:+.4f} vs server current, "
+                  f"server baseline={best_hyp.baseline_recall_100:.4f})")
+
+            if best_hyp.delta_recall_100 > 0:
+                # Adopt directly — no synthesis step, use the hypothesis code as-is
+                print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
+                self._log_final_code(i, best_hyp.hypothesis.code)
+                self._write_preprocess(best_hyp.hypothesis.code)
+
+                # Update global best if this loop's harness recall confirms improvement
+                # (We optimistically assume server delta maps to harness improvement;
+                # the final eval will confirm. Update global best conservatively.)
+                new_recall_estimate = loop_start_recall_100 + best_hyp.delta_recall_100
+                if new_recall_estimate > best_recall_100:
+                    best_recall_100 = new_recall_estimate
+                    best_code = best_hyp.hypothesis.code
+                    print(f"[agent] Global best updated → estimated recall@100≈{best_recall_100:.4f}")
+            else:
+                print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
+
+        # Restore globally best code before final eval
+        # (guards against a later loop degrading what an earlier loop achieved)
+        current_final_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
+        if best_code != current_final_code:
+            print(f"\n[agent] Restoring globally best code (estimated recall@100≈{best_recall_100:.4f})")
+            self._write_preprocess(best_code)
+
+        # Final eval
+        print(f"\n{'#'*60}")
+        print(f"# Final eval (after {n_loops} loop{'s' if n_loops != 1 else ''})")
+        print(f"{'#'*60}")
+        try:
+            final_results = self.run_eval()
+            final_recall = final_results["metrics"]["recall_at_100"]
+            baseline_recall = baseline_results.get("recall_at_k", 0.0)
+            print(f"\n[agent] Improvement: recall@100 {baseline_recall:.4f} → {final_recall:.4f} "
+                  f"({final_recall - baseline_recall:+.4f})")
+        except Exception as e:
+            print(f"[agent] Final eval failed: {e}")
+
+        # Clean up server
+        self._kill_server()
