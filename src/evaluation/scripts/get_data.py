@@ -1,142 +1,195 @@
 """
-get_data.py – One-time data preparation script (run manually, never by agents).
-
-Downloads documents and eval queries from the CRUMB tip-of-the-tongue dataset
-(jfkback/crumb on HuggingFace) using streaming so the full ~1.7 GB corpus is
-never stored on disk, then saves the selected subset to data/ as JSONL files.
-
-Output files (overwritten on each run):
-  data/documents.jsonl  –  one Document per line
-  data/queries.jsonl    –  one EvalQuery per line
+get_data.py — Downloads FULL corpus + queries for CRUMB splits using STREAMING.
 
 Usage:
-  uv run python src/scripts/get_data.py
-  uv run python src/scripts/get_data.py --n-queries 100
+    python -m src.evaluation.scripts.get_data --split paper_retrieval
+    python -m src.evaluation.scripts.get_data --split tip_of_the_tongue
+
+Caches to: data/<split>/documents.jsonl and data/<split>/queries.jsonl
 """
 
-from __future__ import annotations
-
 import argparse
-import ast
-import dataclasses
 import json
 from pathlib import Path
-from typing import Any, List, Set, Tuple
+from typing import Dict, List
+from datasets import load_dataset
+from tqdm import tqdm
 
-from datasets import load_dataset  # type: ignore
+SPLIT_MAP = {
+    "tip_of_the_tongue":              "tip_of_the_tongue",
+    "paper_retrieval":                "paper_retrieval",
+    "stack_exchange":                 "stack_exchange",
+    "clinical_trial":                 "clinical_trial",
+    "legal_qa":                       "legal_qa",
+    "theorem_retrieval":              "theorem_retrieval",
+    "code_retrieval":                 "code_retrieval",
+    "set_operation_entity_retrieval": "set_operation_entity_retrieval",
+}
 
-from schema import Document, EvalQuery
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-HF_REPO   = "jfkback/crumb"
-HF_SPLIT  = "tip_of_the_tongue"
-DATA_DIR  = Path(__file__).parents[2] / "data"
-N_QUERIES = 50
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _parse_qrels(raw: Any) -> List[str]:
-    """Return doc IDs with positive relevance from a full_document_qrels value."""
-    if isinstance(raw, str):
-        qrels = ast.literal_eval(raw)
-    elif raw is None:
-        return []
-    else:
-        qrels = raw
-    return [str(q["id"]) for q in qrels if q.get("label", 0) > 0]
+# Expected corpus sizes from the paper
+EXPECTED_SIZES = {
+    "tip_of_the_tongue": 1_083_337,
+    "stack_exchange": 40_956,
+    "paper_retrieval": 363_133,
+    "set_operation_entity_retrieval": 651_704,
+    "clinical_trial": 914_628,
+    "legal_qa": 1_182_626,
+    "theorem_retrieval": 23_839,
+    "code_retrieval": 232_444,
+}
 
 
-def _fetch(n_queries: int) -> Tuple[List[Document], List["EvalQuery"]]:
-    # --- Step 1: stream eval queries, collect target doc IDs ----------------
-    print(f"Streaming first {n_queries} evaluation queries from {HF_REPO} ...")
-    q_stream = load_dataset(
-        HF_REPO, "evaluation_queries", split=HF_SPLIT, streaming=True
-    )
-
-    queries: List[EvalQuery] = []
-    target_doc_ids: Set[str] = set()
-
-    for row in q_stream:
-        rel_ids = _parse_qrels(row.get("full_document_qrels"))
-        if not rel_ids:
-            continue
-        queries.append(
-            EvalQuery(
-                query_id=str(row["query_id"]),
-                query_text=row["query_content"],
-                relevant_doc_ids=rel_ids,
-            )
-        )
-        target_doc_ids.update(rel_ids)
-        if len(queries) >= n_queries:
-            break
-
-    print(f"  {len(queries)} queries referencing {len(target_doc_ids)} unique docs.")
-
-    # --- Step 2: stream full-doc corpus, fetch only the target docs ----------
-    print("Streaming full-document corpus to retrieve referenced docs ...")
-    doc_stream = load_dataset(
-        HF_REPO, "full_document_corpus", split=HF_SPLIT, streaming=True
-    )
-
-    docs: List[Document] = []
-    remaining = set(target_doc_ids)
-
-    for row in doc_stream:
-        doc_id = str(row["document_id"])
-        if doc_id in remaining:
-            docs.append(
-                Document(
-                    doc_id=doc_id,
-                    text=row["document_content"],
-                    metadata={"parent_id": row.get("parent_id")},
-                )
-            )
-            remaining.discard(doc_id)
-            if not remaining:
-                break
-
-    if remaining:
-        print(f"  Warning: {len(remaining)} doc IDs not found in corpus.")
-
-    print(f"  {len(docs)} documents retrieved.")
-    return docs, queries
+def get_cache_dir(split: str) -> Path:
+    base_dir = Path(__file__).parents[3] / "data"
+    cache_dir = base_dir / split
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 
-def _save(docs: List[Document], queries: List[EvalQuery]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def load_queries(split: str, n_queries: int = None) -> List[Dict]:
+    crumb_name = SPLIT_MAP[split]
+    cache_dir = get_cache_dir(split)
+    cache_file = cache_dir / "queries.jsonl"
 
-    doc_path = DATA_DIR / "documents.jsonl"
-    with doc_path.open("w", encoding="utf-8") as f:
-        for doc in docs:
-            f.write(json.dumps(dataclasses.asdict(doc)) + "\n")
-    print(f"Saved {len(docs)} documents -> {doc_path}")
+    if cache_file.exists():
+        print(f"✓ Loading cached queries from {cache_file}")
+        with cache_file.open("r") as f:
+            queries = [json.loads(line) for line in f]
+        print(f"  Loaded {len(queries)} queries")
+        return queries
 
-    q_path = DATA_DIR / "queries.jsonl"
-    with q_path.open("w", encoding="utf-8") as f:
+    print(f"Downloading queries for {split}...")
+    dataset = load_dataset("jfkback/crumb", "evaluation_queries", split=crumb_name)
+
+    queries = []
+    for item in dataset:
+        qrels = item.get("passage_qrels") or item.get("full_document_qrels") or []
+        relevant_ids = [q["id"] for q in qrels if q.get("label", 0) > 0]
+        if relevant_ids:
+            queries.append({
+                "query_id": item["query_id"],
+                "query_content": item["query_content"],
+                "relevant_doc_ids": relevant_ids,
+            })
+
+    if n_queries and n_queries < len(queries):
+        queries = queries[:n_queries]
+
+    print(f"Caching {len(queries)} queries to {cache_file}")
+    with cache_file.open("w") as f:
         for q in queries:
-            f.write(json.dumps(dataclasses.asdict(q)) + "\n")
-    print(f"Saved {len(queries)} queries  -> {q_path}")
+            f.write(json.dumps(q) + "\n")
+
+    return queries
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+def load_full_corpus_streaming(split: str) -> List[Dict]:
+    """
+    Download corpus using STREAMING to avoid downloading all splits.
+    Much faster and more reliable.
+    """
+    crumb_name = SPLIT_MAP[split]
+    cache_dir = get_cache_dir(split)
+    cache_file = cache_dir / "documents.jsonl"
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Download CRUMB data to data/")
-    parser.add_argument("--n-queries", type=int, default=N_QUERIES)
+    if cache_file.exists():
+        print(f"✓ Loading cached corpus from {cache_file}")
+        with cache_file.open("r") as f:
+            docs = [json.loads(line) for line in f]
+        print(f"  Loaded {len(docs)} documents")
+        return docs
+
+    expected_size = EXPECTED_SIZES.get(split, None)
+    print(f"Downloading corpus for {split} (streaming mode)...")
+    if expected_size:
+        print(f"  Expected size: ~{expected_size:,} documents")
+
+    # Use streaming=True to only fetch this split
+    corpus_dataset = load_dataset(
+        "jfkback/crumb",
+        "passage_corpus",
+        split=crumb_name,
+        streaming=True,
+    )
+
+    docs = []
+    print("  Streaming documents...")
+    
+    # Use tqdm for progress if available, otherwise print every 10k
+    try:
+        from tqdm import tqdm
+        pbar = tqdm(total=expected_size, unit=" docs")
+        for item in corpus_dataset:
+            docs.append({
+                "doc_id": str(item["document_id"]),
+                "text": item["document_content"],
+                "metadata": {},
+            })
+            pbar.update(1)
+        pbar.close()
+    except ImportError:
+        # No tqdm, just print progress
+        for item in corpus_dataset:
+            docs.append({
+                "doc_id": str(item["document_id"]),
+                "text": item["document_content"],
+                "metadata": {},
+            })
+            if len(docs) % 10000 == 0:
+                print(f"    Downloaded {len(docs):,} documents...")
+
+    print(f"\n  Total downloaded: {len(docs):,} documents")
+
+    # Warn if count doesn't match expected
+    if expected_size and abs(len(docs) - expected_size) > 100:
+        print(f"  ⚠️  Expected ~{expected_size:,} but got {len(docs):,}")
+
+    print(f"Caching to {cache_file}")
+    with cache_file.open("w") as f:
+        for doc in docs:
+            f.write(json.dumps(doc) + "\n")
+
+    return docs
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Download CRUMB corpus + queries (STREAMING)")
+    parser.add_argument(
+        "--split",
+        type=str,
+        required=True,
+        choices=list(SPLIT_MAP.keys()),
+        help="CRUMB split name"
+    )
+    parser.add_argument(
+        "--n-queries",
+        type=int,
+        default=None,
+        help="Limit number of queries (default: all)"
+    )
+
     args = parser.parse_args()
 
-    docs, queries = _fetch(args.n_queries)
-    _save(docs, queries)
-    print("Done.")
+    cache_dir = get_cache_dir(args.split)
+    print(f"\n{'='*70}")
+    print(f"CRUMB Data Download (Streaming) — Split: {args.split}")
+    print(f"Cache directory: {cache_dir}")
+    print(f"{'='*70}\n")
+
+    queries = load_queries(args.split, args.n_queries)
+    docs = load_full_corpus_streaming(args.split)
+
+    # Report stats
+    relevant_ids = {str(rid) for q in queries for rid in q["relevant_doc_ids"]}
+    print(f"\n{'='*70}")
+    print(f"✓ Download complete")
+    print(f"  Split       : {args.split}")
+    print(f"  Queries     : {len(queries)}")
+    print(f"  Total docs  : {len(docs):,}")
+    print(f"  Relevant    : {len(relevant_ids)}")
+    print(f"  Distractors : {len(docs) - len(relevant_ids):,}")
+    print(f"  Location    : {cache_dir}")
+    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":

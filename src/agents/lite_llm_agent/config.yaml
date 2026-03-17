@@ -1,0 +1,29 @@
+# LiteLLM Agent Configuration
+# Model name as accepted by litellm (e.g. "gpt-4o", "anthropic/claude-3-5-sonnet-20241022")
+# model: "openai/gpt-5-mini"
+model: "openai/gpt4o"
+temperature: 1.0
+max_tokens: 4096
+
+
+# Available models:
+#   - gpt4o
+#   - gpt-5-mini
+#   - gpt5
+#   - deepseek-r1
+#   - deepseek-v3-0324
+#   - Phi-4-mini-reasoning
+#   - Phi-4-reasoning
+#   - claude-sonnet-3-7
+#   - mistral-large
+#   - claude-haiku-4-5
+#   - meta.llama3-3-70b
+#   - qwen3-coder-30b-a3b
+#   - qwen3-next-80b-a3b
+#   - gemma-3-12b-it
+#   - gemma-3-27b-it
+#   - gemma-3-4b-it
+#   - claude-opus-4-1
+#   - claude-sonnet-4-5
+#   - claude-opus-4-6
+#   - claude-sonnet-4-6

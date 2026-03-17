@@ -1,0 +1,10 @@
+{
+  "agent": "baseline",
+  "recall_at_k": 0.5777777777777777,
+  "ndcg": 0.11602525170951089,
+  "ndcg_k": 10,
+  "top_k": 100,
+  "n_queries": 135,
+  "n_chunks": 10000,
+  "query_results": []
+}

@@ -5,6 +5,9 @@ Usage:
     uv run python main.py --agent gemini_sdk --loops 5
     uv run python main.py --agent gemini_sdk_bright --loops 5 --task sustainable_living
     uv run python main.py --agent gemini_sdk_bright --loops 5 --no-query-text
+    uv run python main.py --agent lite_llm_bright --loops 5 --task biology
+    uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval
+    uv run python main.py --agent analysis_code_agent --loops 5
 """
 
 import argparse
@@ -17,7 +20,14 @@ def main() -> None:
     parser.add_argument(
         "--agent",
         default="gemini_sdk",
-        choices=["gemini_sdk", "gemini_sdk_bright", "lite_llm_bright"],
+        choices=[
+            "gemini_sdk",
+            "gemini_sdk_bright",
+            "lite_llm_bright",
+            "lite_llm_agent",
+            "test_agent",
+            "analysis_code_agent",
+        ],
         help="Which agent to run (default: gemini_sdk)",
     )
     parser.add_argument(
@@ -27,20 +37,32 @@ def main() -> None:
         help="Number of eval+improve loops (default: 3)",
     )
     parser.add_argument(
+        "--split",
+        type=str,
+        default="tip_of_the_tongue",
+        help="CRUMB split name (default: tip_of_the_tongue)",
+    )
+    parser.add_argument(
         "--no-query-text",
         action="store_true",
         default=False,
-        help="Omit raw query text from the prompt (use when Gemini safety filters block content)",
+        help="Omit raw query text from the prompt (use when safety filters block content)",
     )
     parser.add_argument(
         "--task",
         default="sustainable_living",
-        help="BRIGHT task/subset (only used with --agent gemini_sdk_bright, default: sustainable_living)",
+        help="BRIGHT task/subset (used with gemini_sdk_bright / lite_llm_bright, default: sustainable_living)",
+    )
+    parser.add_argument(
+        "--enable_tracing",
+        action="store_true",
+        default=False,
+        help="Enable MLflow tracing of LLM calls (only applies to lite_llm_agent)",
     )
     args = parser.parse_args()
 
     if args.agent == "gemini_sdk":
-        from src.agents.gemini_sdk.agent import GeminiSdkAgent
+        from src.agents import GeminiSdkAgent
         agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
     elif args.agent == "gemini_sdk_bright":
         from src.agents.gemini_sdk_bright.agent import GeminiSdkBrightAgent
@@ -54,9 +76,22 @@ def main() -> None:
             task=args.task,
             include_query_text=not args.no_query_text,
         )
+    elif args.agent == "lite_llm_agent":
+        from src.agents import LiteLLMAgent
+        if args.enable_tracing:
+            import mlflow
+            mlflow.litellm.autolog()
+        agent = LiteLLMAgent(include_query_text=not args.no_query_text)
+    elif args.agent == "test_agent":
+        from src.agents import LiteLLMAgent
+        agent = LiteLLMAgent(include_query_text=not args.no_query_text, test_mode=True)
+    elif args.agent == "analysis_code_agent":
+        from src.agents.analysis_code_agent import AnalysisCodeAgent
+        agent = AnalysisCodeAgent()
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 
+    agent.split = args.split
     agent.run(n_loops=args.loops)
 
 

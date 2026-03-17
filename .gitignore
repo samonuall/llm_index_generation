@@ -1,5 +1,37 @@
 .venv
-**/__pycache__/
 .env
-node_modules
+**.DS_Store
+mlflow.db
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Logs
 **/logs/
+*.log
+
+# Data & archives
+data/**
+data/*/
+data/*/*.jsonl
+*.zip
+*.whl
+results/*/
+
+# Temp files
+*.tmp
+*.temp
+.cache/
+.bm25_cache/
+
+# Agent iterations
+**/iterations/
+
+# Egg-info (build artifacts)
+*.egg-info/
+dist/
+build/
+
+.claude/
