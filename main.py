@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument(
         "--agent",
         default="gemini_sdk",
-        choices=["gemini_sdk", "gemini_sdk_bright"],
+        choices=["gemini_sdk", "gemini_sdk_bright", "lite_llm_bright"],
         help="Which agent to run (default: gemini_sdk)",
     )
     parser.add_argument(
@@ -45,6 +45,12 @@ def main() -> None:
     elif args.agent == "gemini_sdk_bright":
         from src.agents.gemini_sdk_bright.agent import GeminiSdkBrightAgent
         agent = GeminiSdkBrightAgent(
+            task=args.task,
+            include_query_text=not args.no_query_text,
+        )
+    elif args.agent == "lite_llm_bright":
+        from src.agents.lite_llm_bright.agent import LiteLLMBrightAgent
+        agent = LiteLLMBrightAgent(
             task=args.task,
             include_query_text=not args.no_query_text,
         )

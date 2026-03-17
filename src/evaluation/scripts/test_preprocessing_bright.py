@@ -1,5 +1,5 @@
 """
-test_preprocessing_bright.py – BRIGHT evaluation harness. DO NOT MODIFY.
+test_preprocessing_bright.py – BRIGHT evaluation harness.
 
 Mirrors test_preprocessing.py but targets the BRIGHT benchmark:
   - Loads from data/bright/{task}/
@@ -7,6 +7,13 @@ Mirrors test_preprocessing.py but targets the BRIGHT benchmark:
   - Also reports Recall@k and MRR for reference
   - Handles excluded_ids: per-query docs that must be filtered from results
     before scoring (they appeared in the question itself)
+  - Diagnostic fields returned per-query (for agent feedback):
+      rank_of_relevant  – rank of highest relevant doc in extended top-200 search
+      score_of_relevant – BM25 score of that doc
+      score_of_rank1    – BM25 score of rank-1 retrieved doc
+      terms_present     – query content-words found in relevant doc chunks
+      terms_missing     – query content-words NOT found in relevant doc chunks
+      rank1_snippet     – first 200 chars of rank-1 doc when it is wrong
 
 CLI usage:
     uv run python src/evaluation/scripts/test_preprocessing_bright.py --agent <name>
@@ -24,6 +31,7 @@ Paper BM25 baseline (no preprocessing): nDCG@10 ≈ 14.8 (average across all tas
 from __future__ import annotations
 
 import sys
+import re as _re
 import pathlib
 import json
 import argparse
@@ -42,8 +50,40 @@ from schema import Document
 from base import BasePreprocessor
 from build_index import BM25Index
 
+import Stemmer as _StemmerLib
+
 DATA_DIR = _PROJECT_ROOT / "data"
 DEFAULT_TASK = "sustainable_living"
+
+# ---------------------------------------------------------------------------
+# Term-overlap helpers (uses same Snowball stemmer as BM25Index)
+# ---------------------------------------------------------------------------
+
+_STEMMER_OVERLAP = _StemmerLib.Stemmer("english")
+
+_STOPWORDS_OVERLAP = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
+    "with", "by", "from", "as", "is", "was", "are", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
+    "may", "might", "can", "not", "no", "it", "its", "this", "that", "these",
+    "those", "i", "you", "he", "she", "we", "they", "my", "your", "his", "her",
+    "our", "their", "so", "if", "then", "than", "when", "where", "which", "who",
+    "what", "how", "all", "also", "just", "more", "about", "up", "out", "into",
+    "there", "s", "t", "re", "m", "d", "ve", "ll", "use", "used", "using",
+    "one", "two", "get", "got", "can", "use",
+}
+
+
+def _tokenize_overlap(text: str) -> dict[str, str]:
+    """Return {stem: representative_word} for content words. Word length > 2."""
+    words = _re.findall(r"\b[a-z]+\b", text.lower())
+    result: dict[str, str] = {}
+    for w in words:
+        if w not in _STOPWORDS_OVERLAP and len(w) > 2:
+            stem = _STEMMER_OVERLAP.stemWord(w)
+            if stem not in result:
+                result[stem] = w
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +150,10 @@ def evaluate_bright(
     Returns a dict with keys:
       agent, task, ndcg_at_k, recall_at_k, mrr, top_k, n_queries, n_chunks,
       query_results (list of per-query dicts)
+
+    Each per-query dict includes diagnostic fields for agent feedback:
+      rank_of_relevant, score_of_relevant, score_of_rank1,
+      terms_present, terms_missing, rank1_snippet
     """
     docs = _load_documents(task)
     query_records = _load_queries(task)
@@ -128,24 +172,36 @@ def evaluate_bright(
     print("Building BM25 index ...")
     index = BM25Index(chunks)
 
+    # Build doc_id -> chunks map for term overlap computation
+    doc_to_chunks: dict[str, list] = {}
+    for c in chunks:
+        doc_to_chunks.setdefault(c.doc_id, []).append(c)
+
     ndcg_total = 0.0
     recall_hits = 0
     mrr_total = 0.0
     query_results = []
 
+    # Extended search budget for rank diagnostics (200 extra beyond scoring window)
+    diag_extra = 200
+
     for q in query_records:
         excluded = set(q.get("excluded_ids", []))
         relevant = set(q["relevant_doc_ids"])
 
-        # Retrieve more than top_k to allow for excluded_ids filtering
-        raw_results = index.search(q["query_text"], top_k=top_k + len(excluded))
-        # Filter excluded docs, then truncate to top_k
-        filtered = [
+        # Single extended search covering both scoring and rank diagnostics
+        search_k = min(top_k + len(excluded) + diag_extra, len(chunks))
+        raw_results = index.search(q["query_text"], top_k=search_k)
+
+        # Filter excluded docs
+        filtered_all = [
             (chunk, score)
             for chunk, score in raw_results
             if chunk.doc_id not in excluded
-        ][:top_k]
+        ]
 
+        # Top-k for actual scoring
+        filtered = filtered_all[:top_k]
         retrieved_doc_ids = [chunk.doc_id for chunk, _ in filtered]
 
         # nDCG@k
@@ -167,6 +223,34 @@ def evaluate_bright(
                 mrr_total += reciprocal_rank
                 break
 
+        # --- Diagnostics ---
+
+        # Rank of highest relevant doc in the extended filtered list
+        rank_of_relevant = None
+        score_of_relevant = 0.0
+        for rank, (chunk, score) in enumerate(filtered_all, start=1):
+            if chunk.doc_id in relevant:
+                rank_of_relevant = rank
+                score_of_relevant = score
+                break
+
+        # Rank-1 doc info
+        score_of_rank1 = filtered_all[0][1] if filtered_all else 0.0
+        rank1_doc_id = filtered_all[0][0].doc_id if filtered_all else None
+        rank1_is_wrong = (rank1_doc_id not in relevant) if rank1_doc_id else True
+        rank1_snippet = ""
+        if rank1_is_wrong and filtered_all:
+            rank1_snippet = filtered_all[0][0].text[:200].replace("\n", " ").strip()
+
+        # Term overlap: which stemmed query words appear/don't appear in relevant chunks
+        query_stems = _tokenize_overlap(q["query_text"])  # {stem: word}
+        rel_texts = " ".join(
+            c.text for rel_id in relevant for c in doc_to_chunks.get(rel_id, [])
+        )
+        doc_stems = set(_tokenize_overlap(rel_texts).keys())
+        terms_present = sorted(query_stems[s] for s in query_stems if s in doc_stems)
+        terms_missing = sorted(query_stems[s] for s in query_stems if s not in doc_stems)
+
         query_results.append({
             "query_id": q["query_id"],
             "query_text": q["query_text"],
@@ -177,6 +261,13 @@ def evaluate_bright(
             "hit": hit,
             "rank": rank_of_first_hit,
             "reciprocal_rank": reciprocal_rank,
+            # Diagnostic fields
+            "rank_of_relevant": rank_of_relevant,
+            "score_of_relevant": round(score_of_relevant, 4),
+            "score_of_rank1": round(score_of_rank1, 4),
+            "terms_present": terms_present,
+            "terms_missing": terms_missing,
+            "rank1_snippet": rank1_snippet,
         })
 
     n = len(query_records)
