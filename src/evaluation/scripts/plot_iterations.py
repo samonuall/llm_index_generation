@@ -1,8 +1,8 @@
 """
-Plot iteration results for LLM agents across experiments.
+Plot iteration results for LLM agents across experiments with baseline comparison.
 
 Usage:
-    # Plot all results (organized by split)
+    # Plot all results (organized by split) with baseline comparison
     python -m src.evaluation.scripts.plot_iterations
     
     # Filter by agent
@@ -66,6 +66,49 @@ def parse_filename(filename: str) -> Optional[Dict[str, any]]:
             'iteration': int(match.group(4))
         }
     return None
+
+
+def load_baseline_metrics(results_dir: Path, split: str, n_docs: int, top_k: int) -> Dict[str, float]:
+    """Load baseline metrics for a given split/configuration."""
+    baselines = {}
+    
+    # Try various baseline filename patterns
+    patterns = [
+        f"baseline_{n_docs}docs_{top_k}.json",
+        f"baseline_{split}_{n_docs}docs_{top_k}.json",
+        f"baseline.json"
+    ]
+    
+    # Search in split-specific directories and root
+    search_paths = [
+        results_dir / split,
+        results_dir
+    ]
+    
+    for search_path in search_paths:
+        if not search_path.exists():
+            continue
+            
+        for pattern in patterns:
+            baseline_file = search_path / pattern
+            if baseline_file.exists():
+                try:
+                    with open(baseline_file, 'r') as f:
+                        data = json.load(f)
+                        metrics = data.get('metrics', {})
+                        
+                        # Extract relevant metrics
+                        baselines['recall_at_10'] = metrics.get('recall_at_10')
+                        baselines['recall_at_100'] = metrics.get('recall_at_100')
+                        baselines['ndcg_at_10'] = metrics.get('ndcg_at_10')
+                        
+                        print(f"  📍 Loaded baseline from {baseline_file.name}")
+                        return baselines
+                except (json.JSONDecodeError, KeyError) as e:
+                    print(f"  ⚠️  Error reading {baseline_file}: {e}")
+                    continue
+    
+    return baselines
 
 
 def load_results(results_dir: Path, agent_filter: Optional[str] = None, 
@@ -166,8 +209,9 @@ def calculate_improvements(results: List[IterationResult], metric: str) -> Dict[
     }
 
 
-def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: List[str]):
-    """Plot all metrics overlaid on a single axis."""
+def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: List[str],
+                          baselines: Dict[str, float] = None):
+    """Plot all metrics overlaid on a single axis with baseline comparison."""
     
     metric_configs = {
         'recall_at_10': {'label': 'Recall@10', 'color': '#00ff00', 'marker': 'o'},
@@ -179,6 +223,9 @@ def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: L
     all_values = []
     best_overall = {'metric': None, 'value': -np.inf, 'iter': None}
     
+    if baselines is None:
+        baselines = {}
+    
     for metric in metrics_to_plot:
         stats = calculate_improvements(results, metric)
         if not stats:
@@ -189,6 +236,10 @@ def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: L
         iterations = list(range(len(stats['values'])))
         all_values.extend(stats['values'])
         
+        # Add baseline to all_values for y-axis scaling
+        if metric in baselines and baselines[metric] is not None:
+            all_values.append(baselines[metric])
+        
         # Track best overall across all metrics
         if stats['best'] > best_overall['value']:
             best_overall = {
@@ -196,6 +247,13 @@ def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: L
                 'value': stats['best'],
                 'iter': stats['values'].index(stats['best'])
             }
+        
+        # Plot baseline as dotted horizontal line
+        if metric in baselines and baselines[metric] is not None:
+            baseline_val = baselines[metric]
+            ax.axhline(y=baseline_val, color=config['color'], linestyle=':', 
+                      linewidth=2.5, alpha=0.7, zorder=1,
+                      label=f"{config['label']} Baseline ({baseline_val:.4f})")
         
         # Plot all experiments as semi-transparent dots
         ax.scatter(iterations, stats['values'], 
@@ -227,7 +285,7 @@ def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: L
                   marker='*', s=500, c='gold', edgecolors='white', 
                   linewidth=2, zorder=5, label=f"Best: {best_overall['metric']}")
     
-    # Add stats text
+    # Add stats text with baseline comparison
     n_iterations = len(results)
     stats_text = f"Iterations: {n_iterations}\n"
     
@@ -235,7 +293,20 @@ def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: L
         stats = calculate_improvements(results, metric)
         if stats:
             config = metric_configs.get(metric, {'label': metric})
-            stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}%\n"
+            baseline_val = baselines.get(metric)
+            
+            if baseline_val is not None:
+                # Handle zero baseline
+                if baseline_val == 0:
+                    if stats['best'] > 0:
+                        stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}% (vs baseline: +∞)\n"
+                    else:
+                        stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}% (baseline was 0)\n"
+                else:
+                    vs_baseline = ((stats['best'] - baseline_val) / baseline_val * 100)
+                    stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}% (vs baseline: {vs_baseline:+.1f}%)\n"
+            else:
+                stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}%\n"
     
     ax.text(0.02, 0.98, stats_text.strip(), transform=ax.transAxes, 
             fontsize=9, verticalalignment='top',
@@ -252,24 +323,24 @@ def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: L
     ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     ax.set_xlim(-0.5, len(results) - 0.5)
     
-    # Legend
-    ax.legend(loc='upper right', fontsize=9, framealpha=0.9, 
-             bbox_to_anchor=(0.98, 0.98))
+    # Legend (place outside to avoid clutter)
+    ax.legend(loc='center left', fontsize=8, framealpha=0.9, 
+             bbox_to_anchor=(1.02, 0.5))
     
     # Set y-axis limits with padding
     if all_values:
         y_min, y_max = min(all_values), max(all_values)
         y_range = y_max - y_min
         if y_range > 0:
-            ax.set_ylim(max(0, y_min - 0.05 * y_range), 
+            ax.set_ylim(max(0, y_min - 0.1 * y_range), 
                        min(1, y_max + 0.05 * y_range))
         else:
             ax.set_ylim(0, 1)
 
 
 def plot_metric_trajectory(ax, results: List[IterationResult], metric: str, 
-                          metric_label: str, higher_is_better: bool = True):
-    """Plot single metric trajectory in autonomous ML research style."""
+                          metric_label: str, baseline_value: Optional[float] = None):
+    """Plot single metric trajectory with baseline comparison."""
     stats = calculate_improvements(results, metric)
     if not stats:
         ax.text(0.5, 0.5, f'No {metric} data', ha='center', va='center', 
@@ -277,6 +348,12 @@ def plot_metric_trajectory(ax, results: List[IterationResult], metric: str,
         return
     
     iterations = list(range(len(stats['values'])))
+    
+    # Plot baseline as dotted horizontal line
+    if baseline_value is not None:
+        ax.axhline(y=baseline_value, color='gray', linestyle=':', 
+                  linewidth=2.5, alpha=0.8, zorder=1,
+                  label=f'Baseline ({baseline_value:.4f})')
     
     # Plot all experiments as gray dots
     ax.scatter(iterations, stats['values'], c='gray', alpha=0.5, s=60, 
@@ -297,12 +374,25 @@ def plot_metric_trajectory(ax, results: List[IterationResult], metric: str,
     ax.scatter([best_iter], [stats['best']], marker='*', s=400, 
                c='white', edgecolors='black', linewidth=2, zorder=5)
     
-    # Add stats text
+    # Add stats text with baseline comparison
     stats_text = (
         f"Experiment: {len(iterations)} iterations\n"
         f"Best {metric_label}: {stats['best']:.4f}\n"
-        f"Improvement: {stats['improvement_pct']:+.1f}%"
     )
+    
+    if baseline_value is not None:
+        # Handle zero baseline
+        if baseline_value == 0:
+            if stats['best'] > 0:
+                stats_text += f"vs Baseline: +∞\n"
+            else:
+                stats_text += f"Baseline was 0\n"
+        else:
+            vs_baseline = ((stats['best'] - baseline_value) / baseline_value * 100)
+            stats_text += f"vs Baseline: {vs_baseline:+.1f}%\n"
+    
+    stats_text += f"Improvement: {stats['improvement_pct']:+.1f}%"
+    
     ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
             fontsize=10, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='black', alpha=0.7),
@@ -321,18 +411,27 @@ def plot_metric_trajectory(ax, results: List[IterationResult], metric: str,
     # Legend
     ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
     
-    # Set y-axis limits with some padding
-    y_min, y_max = min(stats['values']), max(stats['values'])
+    # Set y-axis limits with some padding (include baseline in range)
+    all_vals = stats['values'][:]
+    if baseline_value is not None:
+        all_vals.append(baseline_value)
+    
+    y_min, y_max = min(all_vals), max(all_vals)
     y_range = y_max - y_min
     if y_range > 0:
-        ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
+        ax.set_ylim(y_min - 0.1 * y_range, y_max + 0.05 * y_range)
 
 
 def create_experiment_plot(results: List[IterationResult], exp_key: tuple, 
                            metrics_to_plot: List[str], output_path: Optional[Path] = None,
-                           separate_plots: bool = False):
-    """Create plot for a single experiment - overlaid or separate subplots."""
+                           separate_plots: bool = False, results_dir: Path = None):
+    """Create plot for a single experiment with baseline comparison."""
     agent, split, n_docs, top_k = exp_key
+    
+    # Load baseline metrics
+    baselines = {}
+    if results_dir:
+        baselines = load_baseline_metrics(results_dir, split, n_docs, top_k)
     
     # Filter metrics that have data
     available_metrics = []
@@ -374,12 +473,13 @@ def create_experiment_plot(results: List[IterationResult], exp_key: tuple,
             # Set tick colors
             ax.tick_params(colors='white', which='both')
             
-            plot_metric_trajectory(ax, results, metric, metric_labels[metric])
+            baseline_val = baselines.get(metric)
+            plot_metric_trajectory(ax, results, metric, metric_labels[metric], baseline_val)
         
         footer_y = 0.01
     else:
-        # Overlaid plot
-        fig, ax = plt.subplots(figsize=(14, 8))
+        # Overlaid plot - need wider figure for legend
+        fig, ax = plt.subplots(figsize=(16, 8))
         fig.patch.set_facecolor('#0d0d0d')
         ax.set_facecolor('#1a1a1a')
         
@@ -394,12 +494,14 @@ def create_experiment_plot(results: List[IterationResult], exp_key: tuple,
         # Set tick colors
         ax.tick_params(colors='white', which='both')
         
-        plot_overlaid_metrics(ax, results, available_metrics)
+        plot_overlaid_metrics(ax, results, available_metrics, baselines)
         
         footer_y = 0.02
     
     # Add footer with experiment details
     footer_text = f"Documents: {n_docs:,} | Top-k: {top_k} | Iterations: {len(results)}"
+    if baselines:
+        footer_text += " | ⋯ Dotted lines = original baseline"
     fig.text(0.5, footer_y, footer_text, ha='center', fontsize=10, 
              color='gray', family='monospace')
     
@@ -418,7 +520,7 @@ def create_experiment_plot(results: List[IterationResult], exp_key: tuple,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot iteration results for LLM preprocessing agents",
+        description="Plot iteration results for LLM preprocessing agents with baseline comparison",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -457,11 +559,13 @@ def main():
     if len(experiments) == 1 and args.output:
         # Single experiment with explicit output path
         exp_key, exp_results = list(experiments.items())[0]
-        create_experiment_plot(exp_results, exp_key, args.metrics, args.output, args.separate_plots)
+        create_experiment_plot(exp_results, exp_key, args.metrics, args.output, 
+                             args.separate_plots, args.results_dir)
     elif len(experiments) == 1 and not args.output:
         # Single experiment, show interactively
         exp_key, exp_results = list(experiments.items())[0]
-        create_experiment_plot(exp_results, exp_key, args.metrics, None, args.separate_plots)
+        create_experiment_plot(exp_results, exp_key, args.metrics, None, 
+                             args.separate_plots, args.results_dir)
     else:
         # Multiple experiments - organize by split
         print(f"\n📁 Saving plots to {args.output_dir}/")
@@ -473,7 +577,8 @@ def main():
             filename = f"{agent}_{n_docs}docs_top{top_k}.png"
             output_path = split_dir / filename
             
-            create_experiment_plot(exp_results, exp_key, args.metrics, output_path, args.separate_plots)
+            create_experiment_plot(exp_results, exp_key, args.metrics, output_path, 
+                                 args.separate_plots, args.results_dir)
         
         print(f"\n✅ Generated {len(experiments)} plot(s)")
 
