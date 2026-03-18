@@ -455,13 +455,126 @@ def evaluate(
     return results
 
 
-# ---------------------------------------------------------------------------
-# CLI (keep existing main() function)
-# ---------------------------------------------------------------------------
-
 def main() -> None:
-    # [Keep existing CLI code unchanged]
-    pass
+    parser = argparse.ArgumentParser(
+        description="Test preprocessing agent on CRUMB split with iteration tracking",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--agent",
+        type=str,
+        required=True,
+        help="Agent name (folder under src/agents/)",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        help="CRUMB split name (if not provided, lists available splits)",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=100,
+        help="Number of top results to retrieve (default: 100)",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Skip saving results (just print metrics)",
+    )
+    parser.add_argument(
+        "--iteration",
+        type=int,
+        default=None,
+        help="Iteration number (for tracking agent improvement over time)",
+    )
+    parser.add_argument(
+        "--track-iterations",
+        action="store_true",
+        help="Enable iteration tracking and summary generation",
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Compare with previous results after evaluation",
+    )
+
+    args = parser.parse_args()
+
+    # List available splits if no split provided
+    if not args.split:
+        available = _list_available_splits()
+        if available:
+            print("Available splits:")
+            for s in available:
+                print(f"  - {s}")
+        else:
+            print("No cached splits found. Run get_data.py first.")
+        return
+
+    # Load the agent's preprocessor
+    agent_path = _PROJECT_ROOT / "src" / "agents" / args.agent
+    if not agent_path.exists():
+        print(f"❌ Agent not found: {args.agent}")
+        print(f"   Expected: {agent_path}")
+        return
+
+    # Import the preprocessor
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "preprocess_module",
+            agent_path / "preprocess.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        preprocessor = module.Preprocessor()
+    except Exception as e:
+        print(f"❌ Failed to load agent '{args.agent}': {e}")
+        return
+
+    # Run evaluation
+    results = evaluate(
+        preprocessor=preprocessor,
+        split=args.split,
+        top_k=args.top_k,
+        save_results=not args.no_save,
+        iteration=args.iteration,
+        track_iterations=args.track_iterations,
+    )
+
+    # Compare with previous results if requested
+    if args.compare and not args.no_save:
+        print(f"\n{'='*60}")
+        print("COMPARISON WITH PREVIOUS RUNS")
+        print(f"{'='*60}")
+        
+        all_results = _load_all_results(args.split)
+        if len(all_results) > 1:
+            # Sort by timestamp
+            all_results.sort(key=lambda x: x.get('timestamp', ''))
+            
+            print(f"\n{'Agent':<25} {'Recall@10':<12} {'Recall@100':<12} {'nDCG@10':<12} {'Timestamp':<20}")
+            print("-"*85)
+            
+            for r in all_results:
+                agent = r.get('agent', 'unknown')
+                metrics = r.get('metrics', {})
+                timestamp = r.get('timestamp', '')[:19]  # Truncate to datetime
+                iter_num = r.get('iteration')
+                
+                agent_display = f"{agent} (iter {iter_num})" if iter_num is not None else agent
+                
+                print(
+                    f"{agent_display:<25} "
+                    f"{metrics.get('recall_at_10', 0):<12.4f} "
+                    f"{metrics.get('recall_at_100', 0):<12.4f} "
+                    f"{metrics.get('ndcg_at_10', 0):<12.4f} "
+                    f"{timestamp:<20}"
+                )
+        else:
+            print("No previous results to compare.")
+        print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
