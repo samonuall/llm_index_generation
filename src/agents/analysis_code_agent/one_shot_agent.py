@@ -1,0 +1,206 @@
+"""
+one_shot_agent.py — Single-call LLM baseline.
+
+Makes one LLM call with the task description + baseline eval feedback,
+writes the returned preprocess.py, runs eval, and saves results.
+No iterative loop, no bash investigation, no hypothesis history.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import pathlib
+import time
+import datetime
+
+import yaml
+from dotenv import load_dotenv
+from litellm import completion
+
+_PROJECT_ROOT = pathlib.Path(__file__).parents[3]
+load_dotenv(_PROJECT_ROOT / ".env")
+_AGENT_DIR = pathlib.Path(__file__).parent
+
+
+def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None) -> None:
+    """Run the one-shot baseline: one LLM call → eval → save results."""
+
+    config_path = _AGENT_DIR / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    model = model or config.get("code_model", "openai/gpt4o")
+    api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+    api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
+    temperature = config.get("code_temperature", 1.0)
+    max_distractors = config.get("max_distractors", 9000)
+
+    # --- Load data ---
+    import subprocess, atexit, sys
+    from .agent import _load_data
+    from .run_tracker import RunTracker
+    from .eval_utils import load_preprocessor_from_code, run_subset_eval
+    from .bm25_client import BM25Client
+
+    _EVAL_DIR = _PROJECT_ROOT / "src" / "evaluation"
+    if str(_EVAL_DIR) not in sys.path:
+        sys.path.insert(0, str(_EVAL_DIR))
+
+    print("[one_shot] Loading data ...")
+    documents, queries = _load_data(split, max_distractors=max_distractors)
+    print(f"[one_shot] {len(documents)} docs, {len(queries)} queries.")
+
+    # --- Load baseline ---
+    baseline_path = _AGENT_DIR.parent / "baseline_results.json"
+    baseline_results = json.loads(baseline_path.read_text(encoding="utf-8"))
+    baseline_recall = baseline_results.get("recall_at_k", 0.0)
+    baseline_ndcg = baseline_results.get("ndcg", 0.0)
+
+    # --- Start BM25 server ---
+    server_port = config.get("server_port", 8765)
+    persist_dir = str(_AGENT_DIR / ".bm25_cache")
+    server_path = _AGENT_DIR / "bm25_server.py"
+    server_proc = subprocess.Popen(
+        ["uv", "run", "python", str(server_path), "--port", str(server_port), "--persist-dir", persist_dir],
+        cwd=str(_PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    atexit.register(lambda: server_proc.terminate())
+    time.sleep(3)
+    client = BM25Client(base_url=f"http://localhost:{server_port}")
+
+    # --- Identify failing queries via baseline preprocessor ---
+    baseline_preprocess_path = _AGENT_DIR.parent / "baseline" / "preprocess.py"
+    baseline_code = baseline_preprocess_path.read_text(encoding="utf-8")
+
+    try:
+        baseline_preprocessor = load_preprocessor_from_code(baseline_code)
+        baseline_chunks = baseline_preprocessor.preprocess(documents)
+        client.build_index("one_shot_baseline", baseline_chunks, persist=False)
+        baseline_eval = run_subset_eval("one_shot_baseline", queries, client, top_k=100)
+        miss_ids = [r.query_id for r in baseline_eval.per_query if not r.hit_at_100][:30]
+    except Exception as e:
+        print(f"[one_shot] Baseline eval failed: {e} — using empty miss list.")
+        miss_ids = []
+
+    # --- Build prompt ---
+    system_prompt = (_AGENT_DIR / "context" / "CODE_SYSTEM.md").read_text(encoding="utf-8")
+    context_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+    current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
+
+    miss_section = ""
+    if miss_ids:
+        miss_section = (
+            f"\n## Currently Failing Queries (not retrieved in top-100)\n"
+            f"These {len(miss_ids)} query IDs fail with the baseline preprocessor: "
+            f"{', '.join(miss_ids)}\n"
+            f"Design your preprocessing to improve recall for these queries.\n"
+        )
+
+    prompt = f"""## Task
+You are given a BM25 retrieval system over a pre-chunked Wikipedia corpus.
+The current preprocessing achieves:
+  - Recall@100: {baseline_recall:.4f}
+  - nDCG@10:    {baseline_ndcg:.4f}
+
+Write a single, complete preprocess.py that will improve these scores.
+You have ONE attempt — make it count.
+
+## Dataset Info
+{context_info}
+
+## Current preprocess.py (starting point)
+```python
+{current_code}
+```
+{miss_section}
+Output a single complete Python file inside a ```python ... ``` block.
+The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(self, docs) -> List[Chunk]` method.
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+
+    # --- Call LLM ---
+    tracker = RunTracker()
+    print(f"[one_shot] Calling {model} ...")
+    t0 = time.time()
+    try:
+        response = completion(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        tracker.record_llm_call(response, time.time() - t0, agent="one_shot")
+        text = response.choices[0].message.content or ""
+    except Exception as e:
+        print(f"[one_shot] LLM call failed: {e}")
+        server_proc.terminate()
+        return
+
+    # --- Extract and write code ---
+    match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
+    if not match:
+        print("[one_shot] No python block found in response.")
+        server_proc.terminate()
+        return
+
+    code = match.group(1).strip()
+    preprocess_path = _AGENT_DIR / "preprocess.py"
+    preprocess_path.write_text(code + "\n", encoding="utf-8")
+    print(f"[one_shot] preprocess.py written ({len(code.splitlines())} lines).")
+
+    # --- Eval ---
+    print("[one_shot] Running eval ...")
+    final_results = None
+    try:
+        preprocessor = load_preprocessor_from_code(code)
+        chunks = preprocessor.preprocess(documents)
+        client.build_index("one_shot_eval", chunks, persist=False)
+        summary = run_subset_eval("one_shot_eval", queries, client, top_k=100)
+        final_results = {
+            "recall_at_100": summary.recall_at_100,
+            "recall_at_10": summary.recall_at_10,
+            "ndcg_at_10": summary.ndcg_at_10,
+        }
+        print(
+            f"\n  Recall@10  : {summary.recall_at_10:.4f}\n"
+            f"  Recall@100 : {summary.recall_at_100:.4f}\n"
+            f"  nDCG@10    : {summary.ndcg_at_10:.4f}\n"
+            f"\n[one_shot] Improvement: recall@100 {baseline_recall:.4f} → {summary.recall_at_100:.4f} "
+            f"({summary.recall_at_100 - baseline_recall:+.4f})"
+        )
+    except Exception as e:
+        print(f"[one_shot] Eval failed: {e}")
+
+    server_proc.terminate()
+
+    # --- Save results ---
+    results_dir = _PROJECT_ROOT / "results"
+    results_dir.mkdir(exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = results_dir / f"one_shot_{timestamp}.json"
+    payload = {
+        "condition": "one_shot",
+        "loops": 1,
+        "split": split,
+        "model": model,
+        "seed": 42,
+        "n_docs": len(documents),
+        "n_queries": len(queries),
+        "baseline_recall_100": baseline_recall,
+        "baseline_ndcg_10": baseline_ndcg,
+        "final_recall_100": final_results.get("recall_at_100") if final_results else None,
+        "final_ndcg_10": final_results.get("ndcg_at_10") if final_results else None,
+        "improvement_recall_100": (
+            round(final_results["recall_at_100"] - baseline_recall, 4) if final_results else None
+        ),
+        "latency": tracker.to_dict(),
+    }
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"[one_shot] Results saved → {out_path}")

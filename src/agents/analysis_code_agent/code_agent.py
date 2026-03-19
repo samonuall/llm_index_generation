@@ -7,6 +7,7 @@ import os
 import re
 import json
 import pathlib
+import time
 import concurrent.futures
 from dataclasses import dataclass, field
 
@@ -46,7 +47,8 @@ class HypothesisResult:
 
 
 class CodeAgent:
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, tracker=None) -> None:
+        self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
         self._temperature = config.get("code_temperature", 0.7)
         self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
@@ -65,6 +67,7 @@ class CodeAgent:
         n: int = 4,
         past_hypotheses: list[dict] | None = None,
         persistent_failure_ids: list[str] | None = None,
+        query_lookup: dict[str, str] | None = None,
     ) -> list[Hypothesis]:
         """Single LLM call to generate N hypotheses. Output JSON inside <hypotheses>...</hypotheses> tags."""
 
@@ -86,6 +89,18 @@ class CodeAgent:
                     f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
                     f"proven={ph['proven']}. {ph.get('notes', '')}"
                 )
+                # Contrastive table: show query text for improved and regressed queries
+                if query_lookup:
+                    improved = ph.get("improved_query_ids", [])[:5]
+                    regressed = ph.get("regressed_query_ids", [])[:5]
+                    if improved or regressed:
+                        lines.append("  **What changed (contrastive):**")
+                    for qid in improved:
+                        qt = query_lookup.get(qid, "")[:120]
+                        lines.append(f"  ✓ fixed   [{qid}] \"{qt}\"")
+                    for qid in regressed:
+                        qt = query_lookup.get(qid, "")[:120]
+                        lines.append(f"  ✗ broke   [{qid}] \"{qt}\"")
 
             diagnosis = ""
             if all_failed and chunking_variations >= 3:
@@ -168,6 +183,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
         ]
 
         try:
+            _t0 = time.time()
             response = completion(
                 model=self._model,
                 messages=messages,
@@ -175,6 +191,8 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 api_key=self._api_key,
                 api_base=self._api_base,
             )
+            if self._tracker:
+                self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
             text = response.choices[0].message.content or ""
         except Exception as e:
             print(f"[code_agent] Hypothesis generation failed: {e}")
@@ -479,6 +497,7 @@ The code MUST:
         ]
 
         try:
+            _t0 = time.time()
             response = completion(
                 model=self._model,
                 messages=messages,
@@ -486,6 +505,8 @@ The code MUST:
                 api_key=self._api_key,
                 api_base=self._api_base,
             )
+            if self._tracker:
+                self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
             text = response.choices[0].message.content or ""
         except Exception as e:
             print(f"[code_agent] Final code generation failed: {e}")

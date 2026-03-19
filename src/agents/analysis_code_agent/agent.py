@@ -34,6 +34,7 @@ from .analysis_agent import AnalysisAgent
 from .code_agent import CodeAgent
 from .bm25_client import BM25Client
 from .run_journal import RunJournal
+from .run_tracker import RunTracker
 
 
 def _load_config() -> dict:
@@ -106,8 +107,10 @@ def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, se
 class AnalysisCodeAgent(AgentRunner):
     agent_name = "analysis_code_agent"
 
-    def __init__(self) -> None:
+    def __init__(self, use_history: bool = True, use_contrastive: bool = True) -> None:
         self._config = _load_config()
+        self._use_history = use_history
+        self._use_contrastive = use_contrastive
         self._server_process = None
         self._client = BM25Client(
             base_url=f"http://localhost:{self._config.get('server_port', 8765)}",
@@ -334,6 +337,49 @@ class AnalysisCodeAgent(AgentRunner):
         preprocess_path.write_text(code + "\n", encoding="utf-8")
         print(f"[agent] preprocess.py updated ({len(code.splitlines())} lines).")
 
+    @property
+    def condition(self) -> str:
+        if self._use_history and self._use_contrastive:
+            return "agent_contrastive"
+        if self._use_history:
+            return "agent_history"
+        return "agent"
+
+    def _write_results(
+        self,
+        tracker: RunTracker,
+        n_loops: int,
+        n_docs: int,
+        n_queries: int,
+        baseline_results: dict,
+        final_results: dict | None,
+    ) -> None:
+        results_dir = _PROJECT_ROOT / "results"
+        results_dir.mkdir(exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = results_dir / f"{self.condition}_{timestamp}.json"
+
+        metrics = final_results.get("metrics", {}) if final_results else {}
+        payload = {
+            "condition": self.condition,
+            "loops": n_loops,
+            "split": getattr(self, "split", "tip_of_the_tongue"),
+            "seed": 42,
+            "n_docs": n_docs,
+            "n_queries": n_queries,
+            "baseline_recall_100": baseline_results.get("recall_at_k"),
+            "baseline_ndcg_10": baseline_results.get("ndcg"),
+            "final_recall_100": metrics.get("recall_at_100"),
+            "final_ndcg_10": metrics.get("ndcg_at_10"),
+            "improvement_recall_100": (
+                round(metrics.get("recall_at_100", 0) - baseline_results.get("recall_at_k", 0), 4)
+                if final_results else None
+            ),
+            "latency": tracker.to_dict(),
+        }
+        out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"[agent] Results saved → {out_path}")
+
     # --- Main loop ---
 
     def run(self, n_loops: int) -> None:
@@ -358,9 +404,10 @@ class AnalysisCodeAgent(AgentRunner):
         # Start BM25 server
         self._ensure_server_running()
 
-        # Create sub-agents + journal
-        analysis_agent = AnalysisAgent(self._config)
-        code_agent = CodeAgent(self._config)
+        # Create tracker + sub-agents + journal
+        tracker = RunTracker()
+        analysis_agent = AnalysisAgent(self._config, tracker=tracker)
+        code_agent = CodeAgent(self._config, tracker=tracker)
         max_hypotheses = self._config.get("max_hypotheses", 4)
         all_past_hypotheses: list[dict] = []  # track across loops
         journal = RunJournal(_AGENT_DIR / "logs")
@@ -428,7 +475,7 @@ class AnalysisCodeAgent(AgentRunner):
                     queries=queries,
                     client=self._client,
                     split=self.split,
-                    journal_summary=journal.summary_for_prompt(),
+                    journal_summary=journal.summary_for_prompt() if self._use_history else None,
                 )
                 self._log_analysis(i, analysis_result)
             except Exception as e:
@@ -440,12 +487,14 @@ class AnalysisCodeAgent(AgentRunner):
             # Hypothesis generation
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
             persistent_fails = journal.persistent_failure_ids(min_iters=max(1, i))
+            query_lookup = {q.query_id: q.query_text for q in queries} if self._use_contrastive else None
             hypotheses = code_agent.generate_hypotheses(
                 analysis_result.summary,
                 current_code,
                 n=max_hypotheses,
-                past_hypotheses=all_past_hypotheses if all_past_hypotheses else None,
-                persistent_failure_ids=persistent_fails if persistent_fails else None,
+                past_hypotheses=all_past_hypotheses if (all_past_hypotheses and self._use_history) else None,
+                persistent_failure_ids=persistent_fails if (persistent_fails and self._use_history) else None,
+                query_lookup=query_lookup,
             )
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")
 
@@ -474,6 +523,8 @@ class AnalysisCodeAgent(AgentRunner):
                     "delta_ndcg_10": r.delta_ndcg_10,
                     "proven": r.proven,
                     "notes": r.notes,
+                    "improved_query_ids": r.improved_query_ids,
+                    "regressed_query_ids": r.regressed_query_ids,
                 })
 
             # Pick the single best hypothesis by recall@100 on the BM25 server.
@@ -561,6 +612,7 @@ class AnalysisCodeAgent(AgentRunner):
         print(f"\n{'#'*60}")
         print(f"# Final eval (after {n_loops} loop{'s' if n_loops != 1 else ''})")
         print(f"{'#'*60}")
+        final_results = None
         try:
             final_results = self.run_eval()
             final_recall = final_results["metrics"]["recall_at_100"]
@@ -569,6 +621,16 @@ class AnalysisCodeAgent(AgentRunner):
                   f"({final_recall - baseline_recall:+.4f})")
         except Exception as e:
             print(f"[agent] Final eval failed: {e}")
+
+        # Write results JSON
+        self._write_results(
+            tracker=tracker,
+            n_loops=n_loops,
+            n_docs=len(documents),
+            n_queries=len(queries),
+            baseline_results=baseline_results,
+            final_results=final_results,
+        )
 
         # Clean up server
         self._kill_server()

@@ -4,10 +4,16 @@ main.py – CLI entry point for LLM-driven preprocessing agents.
 Usage:
     uv run python main.py --agent gemini_sdk --loops 5
     uv run python main.py --agent gemini_sdk_bright --loops 5 --task sustainable_living
-    uv run python main.py --agent gemini_sdk_bright --loops 5 --no-query-text
     uv run python main.py --agent lite_llm_bright --loops 5 --task biology
     uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval
-    uv run python main.py --agent analysis_code_agent --loops 5
+
+    # Analysis agent ablation conditions:
+    uv run python main.py --agent analysis_code_agent --loops 3 --condition agent
+    uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_history
+    uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_contrastive
+
+    # One-shot LLM baseline (no loops):
+    uv run python main.py --agent one_shot
 """
 
 import argparse
@@ -27,8 +33,15 @@ def main() -> None:
             "lite_llm_agent",
             "test_agent",
             "analysis_code_agent",
+            "one_shot",
         ],
         help="Which agent to run (default: gemini_sdk)",
+    )
+    parser.add_argument(
+        "--condition",
+        default="agent_contrastive",
+        choices=["agent", "agent_history", "agent_contrastive"],
+        help="Ablation condition for analysis_code_agent (default: agent_contrastive)",
     )
     parser.add_argument(
         "--loops",
@@ -87,7 +100,13 @@ def main() -> None:
         agent = LiteLLMAgent(include_query_text=not args.no_query_text, test_mode=True)
     elif args.agent == "analysis_code_agent":
         from src.agents.analysis_code_agent import AnalysisCodeAgent
-        agent = AnalysisCodeAgent()
+        use_history = args.condition in ("agent_history", "agent_contrastive")
+        use_contrastive = args.condition == "agent_contrastive"
+        agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive)
+    elif args.agent == "one_shot":
+        from src.agents.analysis_code_agent.one_shot_agent import run_one_shot
+        run_one_shot(split=args.split)
+        return
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 

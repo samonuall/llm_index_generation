@@ -29,7 +29,8 @@ class AnalysisResult:
 
 
 class AnalysisAgent:
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, tracker=None) -> None:
+        self._tracker = tracker
         self._model = config.get("analysis_model", "openai/gpt-4o-mini")
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
@@ -124,6 +125,7 @@ class AnalysisAgent:
     def _call_llm(self, messages: list[dict], turn: int) -> str | None:
         """Call LLM with retry logic. Returns response text or None on failure."""
         def _do_call(msgs):
+            t0 = time.time()
             response = completion(
                 model=self._model,
                 messages=msgs,
@@ -131,6 +133,8 @@ class AnalysisAgent:
                 api_key=self._api_key,
                 api_base=self._api_base,
             )
+            if self._tracker:
+                self._tracker.record_llm_call(response, time.time() - t0, agent="analysis")
             return response.choices[0].message.content or ""
 
         try:
