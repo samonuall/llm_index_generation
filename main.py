@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument(
         "--condition",
         default="agent_contrastive",
-        choices=["agent", "agent_history", "agent_contrastive"],
+        choices=["agent", "agent_history", "agent_contrastive", "agent_contrastive_no_history"],
         help="Ablation condition for analysis_code_agent (default: agent_contrastive)",
     )
     parser.add_argument(
@@ -101,7 +101,7 @@ def main() -> None:
     elif args.agent == "analysis_code_agent":
         from src.agents.analysis_code_agent import AnalysisCodeAgent
         use_history = args.condition in ("agent_history", "agent_contrastive")
-        use_contrastive = args.condition == "agent_contrastive"
+        use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
         agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive)
     elif args.agent == "one_shot":
         from src.agents.analysis_code_agent.one_shot_agent import run_one_shot

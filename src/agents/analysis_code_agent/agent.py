@@ -343,6 +343,8 @@ class AnalysisCodeAgent(AgentRunner):
             return "agent_contrastive"
         if self._use_history:
             return "agent_history"
+        if self._use_contrastive:
+            return "agent_contrastive_no_history"
         return "agent"
 
     def _write_results(
