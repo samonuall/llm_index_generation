@@ -97,6 +97,16 @@ set_operation_entity_retrieval	651,704	423
 theorem_retrieval	23,839	69
 stack_exchange	40,956	107
 
+## Running Ablation Experiments
+
+To reproduce all ablation conditions (baseline, one-shot, agent, agent+history, agent+contrastive, agent+history+contrastive), run:
+
+```bash
+bash run_experiments.sh
+```
+
+This resets `preprocess.py` to the baseline before each condition to prevent result contamination. Results are saved to `results/`.
+
 ## Setup
 
 ```bash
