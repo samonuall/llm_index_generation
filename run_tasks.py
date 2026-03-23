@@ -37,8 +37,10 @@ PAPER_BM25 = {
     "leetcode": 0.244,
     "pony": 0.079,
     "aops": 0.062,
-    "theoremqa_questions": 0.104,
-    "theoremqa_theorems": 0.049,
+    # TheoremQA uses a single task name in get_data_bright.py (`theoremqa`).
+    # This value approximates the aggregate BM25 nDCG@10 across questions (0.104)
+    # and theorems (0.049) reported in the paper.
+    "theoremqa": 0.0765,
 }
 
 RESULTS_FILE = _PROJECT_ROOT / "results" / "bright_results.jsonl"
