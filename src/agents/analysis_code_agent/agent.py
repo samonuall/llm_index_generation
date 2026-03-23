@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import random
 import subprocess
 import sys
 import time
@@ -32,6 +33,7 @@ from ..agent_runner import AgentRunner
 from .analysis_agent import AnalysisAgent
 from .code_agent import CodeAgent
 from .bm25_client import BM25Client
+from .run_journal import RunJournal
 
 
 def _load_config() -> dict:
@@ -40,25 +42,20 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def _load_data(split: str = "tip_of_the_tongue"):
-    """Load documents and queries from data/ directory."""
+def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, seed: int = 42):
+    """Load queries and a manageable corpus: all relevant docs + sampled distractors.
+
+    With 1M+ doc corpora, loading everything is impractical for fast iteration.
+    We keep ALL relevant documents (gold answers) and sample max_distractors from
+    the rest, giving a realistic but fast eval corpus (~10K docs total by default).
+    """
     from schema import Document, EvalQuery
 
     data_dir = _PROJECT_ROOT / "data" / split
     if not data_dir.exists():
         data_dir = _PROJECT_ROOT / "data"
 
-    docs = []
-    docs_path = data_dir / "documents.jsonl"
-    with docs_path.open(encoding="utf-8") as f:
-        for line in f:
-            d = json.loads(line)
-            docs.append(Document(
-                doc_id=d["doc_id"],
-                text=d["text"],
-                metadata=d.get("metadata", {}),
-            ))
-
+    # Load queries first to know which doc_ids are relevant
     queries = []
     queries_path = data_dir / "queries.jsonl"
     with queries_path.open(encoding="utf-8") as f:
@@ -70,6 +67,39 @@ def _load_data(split: str = "tip_of_the_tongue"):
                 relevant_doc_ids=q["relevant_doc_ids"],
             ))
 
+    relevant_ids: set[str] = set()
+    for q in queries:
+        relevant_ids.update(q.relevant_doc_ids)
+
+    # Stream documents: always keep relevant, reservoir-sample distractors
+    rng = random.Random(seed)
+    relevant_docs: list[Document] = []
+    distractor_reservoir: list[Document] = []
+
+    docs_path = data_dir / "documents.jsonl"
+    distractor_count = 0
+    with docs_path.open(encoding="utf-8") as f:
+        for line in f:
+            d = json.loads(line)
+            doc = Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
+            if doc.doc_id in relevant_ids:
+                relevant_docs.append(doc)
+            else:
+                distractor_count += 1
+                if len(distractor_reservoir) < max_distractors:
+                    distractor_reservoir.append(doc)
+                else:
+                    # Reservoir sampling: replace with decreasing probability
+                    j = rng.randint(0, distractor_count - 1)
+                    if j < max_distractors:
+                        distractor_reservoir[j] = doc
+
+    docs = relevant_docs + distractor_reservoir
+    rng.shuffle(docs)
+    print(
+        f"[data] Corpus: {len(relevant_docs)} relevant + {len(distractor_reservoir)} distractors "
+        f"= {len(docs)} docs total (from {distractor_count + len(relevant_docs)} available)"
+    )
     return docs, queries
 
 
@@ -82,6 +112,9 @@ class AnalysisCodeAgent(AgentRunner):
         self._client = BM25Client(
             base_url=f"http://localhost:{self._config.get('server_port', 8765)}",
         )
+        # Set by run() after data loading; used by run_eval()
+        self._documents: list | None = None
+        self._queries: list | None = None
 
     # --- AgentRunner ABC stubs (we override run() instead) ---
 
@@ -90,6 +123,58 @@ class AnalysisCodeAgent(AgentRunner):
 
     def call_llm(self, prompt: str, iteration: int) -> None:
         pass  # not used
+
+    # --- Eval: use sampled corpus via BM25 server (not the full 1M-doc harness) ---
+
+    def run_eval(self, iteration: int | None = None) -> dict:
+        """Evaluate current preprocess.py against the sampled corpus via BM25 server.
+
+        Overrides AgentRunner.run_eval() to avoid reloading 1M docs from disk.
+        Builds a 'harness_eval' index on the server and runs all queries.
+        """
+        from .eval_utils import load_preprocessor_from_code, run_subset_eval
+
+        if self._documents is None or self._queries is None:
+            raise RuntimeError("run_eval() called before documents/queries were loaded.")
+
+        preprocess_path = _AGENT_DIR / "preprocess.py"
+        code = preprocess_path.read_text(encoding="utf-8")
+        preprocessor = load_preprocessor_from_code(code)
+
+        print(f"[agent] Preprocessing {len(self._documents)} documents ...")
+        chunks = preprocessor.preprocess(self._documents)
+        print(f"[agent] Built {len(chunks)} chunks. Pushing to BM25 server ...")
+        self._client.build_index("harness_eval", chunks, persist=False)
+
+        summary = run_subset_eval("harness_eval", self._queries, self._client, top_k=100)
+
+        agent_name = getattr(preprocessor, "name", type(preprocessor).__name__)
+        iter_str = f" (Iteration {iteration})" if iteration is not None else ""
+        print(
+            f"\n{'='*60}\n"
+            f"Agent       : {agent_name}{iter_str}\n"
+            f"{'='*60}\n"
+            f"  Recall@10  : {summary.recall_at_10:.4f}\n"
+            f"  Recall@100 : {summary.recall_at_100:.4f}\n"
+            f"  nDCG@10    : {summary.ndcg_at_10:.4f}\n"
+        )
+
+        return {
+            "agent": agent_name,
+            "config": {
+                "top_k": 100,
+                "n_docs": len(self._documents),
+                "n_queries": len(self._queries),
+                "n_chunks": len(chunks),
+                "chunks_per_doc": len(chunks) / max(len(self._documents), 1),
+            },
+            "metrics": {
+                "recall_at_10": summary.recall_at_10,
+                "recall_at_100": summary.recall_at_100,
+                "ndcg_at_10": summary.ndcg_at_10,
+            },
+            "query_results": [],  # enriched separately by _enrich_eval_results
+        }
 
     # --- Server management ---
 
@@ -264,17 +349,21 @@ class AnalysisCodeAgent(AgentRunner):
         print(f"  nDCG@10    : {baseline_results['ndcg']:.4f}")
 
         # Load data
-        documents, queries = _load_data(self.split)
+        max_distractors = self._config.get("max_distractors", 9000)
+        documents, queries = _load_data(self.split, max_distractors=max_distractors)
+        self._documents = documents
+        self._queries = queries
         print(f"[agent] Loaded {len(documents)} documents, {len(queries)} queries.")
 
         # Start BM25 server
         self._ensure_server_running()
 
-        # Create sub-agents
+        # Create sub-agents + journal
         analysis_agent = AnalysisAgent(self._config)
         code_agent = CodeAgent(self._config)
         max_hypotheses = self._config.get("max_hypotheses", 4)
         all_past_hypotheses: list[dict] = []  # track across loops
+        journal = RunJournal(_AGENT_DIR / "logs")
 
         # Track globally best code + recall@100 (from harness eval) across all loops
         best_recall_100: float = baseline_results.get("recall_at_k", 0.0)
@@ -325,6 +414,9 @@ class AnalysisCodeAgent(AgentRunner):
                 traceback.print_exc()
                 continue
 
+            # Record iteration in journal
+            journal.record_iteration(iteration=i, eval_results=raw_results)
+
             # Analysis agent
             print("[agent] Running analysis agent ...")
             try:
@@ -336,6 +428,7 @@ class AnalysisCodeAgent(AgentRunner):
                     queries=queries,
                     client=self._client,
                     split=self.split,
+                    journal_summary=journal.summary_for_prompt(),
                 )
                 self._log_analysis(i, analysis_result)
             except Exception as e:
@@ -346,11 +439,13 @@ class AnalysisCodeAgent(AgentRunner):
 
             # Hypothesis generation
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
+            persistent_fails = journal.persistent_failure_ids(min_iters=len(journal.iterations))
             hypotheses = code_agent.generate_hypotheses(
                 analysis_result.summary,
                 current_code,
                 n=max_hypotheses,
                 past_hypotheses=all_past_hypotheses if all_past_hypotheses else None,
+                persistent_failure_ids=persistent_fails if persistent_fails else None,
             )
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")
 
@@ -359,7 +454,6 @@ class AnalysisCodeAgent(AgentRunner):
                 continue
 
             # Hypothesis testing — compare each against the BM25 server "current" index
-            # (consistent within-loop comparison; delta is relative to loop_start_recall_100 via server proxy)
             print("[agent] Testing hypotheses ...")
             hypothesis_results = []
             for h in hypotheses:
@@ -370,7 +464,7 @@ class AnalysisCodeAgent(AgentRunner):
                 hypothesis_results.append(result)
             self._log_hypotheses(i, hypothesis_results)
 
-            # Track all tested hypotheses for future loops
+            # Track all tested hypotheses for future loops + journal
             for r in hypothesis_results:
                 all_past_hypotheses.append({
                     "id": r.hypothesis.id,
@@ -395,19 +489,63 @@ class AnalysisCodeAgent(AgentRunner):
                   f"(Δ{best_hyp.delta_recall_100:+.4f} vs server current, "
                   f"server baseline={best_hyp.baseline_recall_100:.4f})")
 
-            if best_hyp.delta_recall_100 > 0:
-                # Adopt directly — no synthesis step, use the hypothesis code as-is
-                print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
-                self._log_final_code(i, best_hyp.hypothesis.code)
-                self._write_preprocess(best_hyp.hypothesis.code)
+            # Record all hypothesis results in journal (mark adopted=False first)
+            for r in hypothesis_results:
+                adopted = (r is best_hyp and best_hyp.delta_recall_100 > 0)
+                journal.record_hypothesis(
+                    iteration=i,
+                    h_id=r.hypothesis.id,
+                    description=r.hypothesis.description,
+                    rationale=r.hypothesis.rationale,
+                    targeted_query_ids=r.hypothesis.query_ids_to_test,
+                    delta_recall_100=r.delta_recall_100,
+                    delta_recall_10=r.delta_recall_10,
+                    delta_ndcg_10=r.delta_ndcg_10,
+                    proven=r.proven,
+                    adopted=adopted,
+                    improved_query_ids=r.improved_query_ids,
+                    regressed_query_ids=r.regressed_query_ids,
+                    error=r.error,
+                )
 
-                # Update global best if this loop's harness recall confirms improvement
-                # (We optimistically assume server delta maps to harness improvement;
-                # the final eval will confirm. Update global best conservatively.)
+            proven_results = [r for r in valid if r.proven]
+
+            if best_hyp.delta_recall_100 > 0:
+                if best_hyp.regressed_query_ids:
+                    print(
+                        f"[agent] ⚠ Overfitting: regresses {len(best_hyp.regressed_query_ids)} queries "
+                        f"({', '.join(best_hyp.regressed_query_ids[:5])}{'...' if len(best_hyp.regressed_query_ids) > 5 else ''})"
+                    )
+
+                # If multiple hypotheses proved, try synthesis instead of just picking best
+                if len(proven_results) > 1:
+                    print(f"[agent] {len(proven_results)} hypotheses proved — attempting synthesis ...")
+                    synthesized = code_agent.generate_final_code(
+                        analysis_result.summary, proven_results, current_code
+                    )
+                    if synthesized:
+                        # Validate and quick-test the synthesized code
+                        val_err = code_agent._validate_code(synthesized, documents)
+                        if val_err:
+                            print(f"[agent] Synthesis validation failed: {val_err[:80]} — falling back to best hypothesis.")
+                            final_code = best_hyp.hypothesis.code
+                        else:
+                            print(f"[agent] Adopting synthesized code.")
+                            final_code = synthesized
+                    else:
+                        print(f"[agent] Synthesis failed — falling back to best hypothesis.")
+                        final_code = best_hyp.hypothesis.code
+                else:
+                    print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
+                    final_code = best_hyp.hypothesis.code
+
+                self._log_final_code(i, final_code)
+                self._write_preprocess(final_code)
+
                 new_recall_estimate = loop_start_recall_100 + best_hyp.delta_recall_100
                 if new_recall_estimate > best_recall_100:
                     best_recall_100 = new_recall_estimate
-                    best_code = best_hyp.hypothesis.code
+                    best_code = final_code
                     print(f"[agent] Global best updated → estimated recall@100≈{best_recall_100:.4f}")
             else:
                 print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")

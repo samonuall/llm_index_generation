@@ -21,7 +21,7 @@ _AGENT_DIR = pathlib.Path(__file__).parent
 from ..agent_runner import AgentRunner
 from ..utils.prompt_utils import build_eval_prompt
 
-_MODEL = "gemini-3-flash-preview"
+_MODEL = "gemini-2.0-flash"
 
 
 class GeminiSdkAgent(AgentRunner):

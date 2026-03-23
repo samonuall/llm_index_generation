@@ -34,7 +34,7 @@ class AnalysisAgent:
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
         self._bash_timeout = config.get("bash_timeout_seconds", 30)
-        self._api_key = os.environ.get("LITELLM_API_KEY", "")
+        self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
         self._server_url = f"http://localhost:{config.get('server_port', 8765)}"
 
@@ -51,6 +51,7 @@ class AnalysisAgent:
         queries: list,
         client,
         split: str = "tip_of_the_tongue",
+        journal_summary: str | None = None,
     ) -> AnalysisResult:
         """Run multi-turn analysis loop. Returns AnalysisResult with summary."""
 
@@ -64,12 +65,17 @@ class AnalysisAgent:
             current_code=current_code,
             candidates=candidates,
             split=split,
+            journal_summary=journal_summary,
         )
+
+        min_bash_turns = 3  # require at least this many bash turns before accepting a summary
 
         messages = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": initial_msg},
         ]
+
+        bash_turns_completed = 0
 
         for turn in range(self._max_turns):
             # Call LLM
@@ -82,12 +88,24 @@ class AnalysisAgent:
             # Check for bash blocks
             bash_match = re.search(r"<bash>(.*?)</bash>", text, re.DOTALL)
             if not bash_match:
-                # No bash block - this is the final summary
-                break
+                if bash_turns_completed < min_bash_turns:
+                    # Haven't done enough bash yet — nudge the agent to investigate
+                    nudge = (
+                        f"You haven't run enough bash commands yet ({bash_turns_completed}/{min_bash_turns} done). "
+                        f"You MUST investigate the actual data before summarizing. "
+                        f"Pick a specific failing query from the list and run the curl command to see what BM25 retrieved for it. "
+                        f"Then look at the gold document. Do NOT summarize until you have done this {min_bash_turns} times."
+                    )
+                    messages.append({"role": "user", "content": nudge})
+                    continue
+                else:
+                    # Enough bash done — this is the final summary
+                    break
 
             # Execute bash command
             cmd = bash_match.group(1).strip()
             bash_output = self._run_bash(cmd)
+            bash_turns_completed += 1
             messages.append({"role": "user", "content": bash_output})
 
         # Extract summary from last assistant message
@@ -105,30 +123,49 @@ class AnalysisAgent:
 
     def _call_llm(self, messages: list[dict], turn: int) -> str | None:
         """Call LLM with retry logic. Returns response text or None on failure."""
-        try:
+        def _do_call(msgs):
             response = completion(
                 model=self._model,
-                messages=messages,
+                messages=msgs,
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
             )
             return response.choices[0].message.content or ""
+
+        try:
+            return _do_call(messages)
         except Exception as e:
             print(f"[analysis_agent] LLM call failed (turn {turn}): {e}")
+            # If content policy violation, strip bash outputs from history and retry
+            if "ContentPolicyViolation" in type(e).__name__ or "content_policy" in str(e).lower() or "content management policy" in str(e).lower():
+                sanitized = self._sanitize_messages(messages)
+                # Update the original messages history in place so future turns use sanitized content
+                messages[:] = sanitized
+                try:
+                    return _do_call(sanitized)
+                except Exception as e2:
+                    print(f"[analysis_agent] LLM retry (sanitized) failed: {e2}")
+                    return None
             time.sleep(5)
             try:
-                response = completion(
-                    model=self._model,
-                    messages=messages,
-                    temperature=self._temperature,
-                    api_key=self._api_key,
-                    api_base=self._api_base,
-                )
-                return response.choices[0].message.content or ""
+                return _do_call(messages)
             except Exception as e2:
                 print(f"[analysis_agent] LLM retry failed: {e2}")
                 return None
+
+    def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
+        """Return messages with bash outputs truncated to 300 chars to avoid content policy violations."""
+        sanitized = []
+        for m in messages:
+            if m["role"] == "user" and "[BASH OUTPUT]" in m.get("content", ""):
+                content = m["content"]
+                if len(content) > 400:
+                    content = content[:400] + "\n... [truncated to avoid content policy filter]"
+                sanitized.append({**m, "content": content})
+            else:
+                sanitized.append(m)
+        return sanitized
 
     def _run_bash(self, cmd: str) -> str:
         """Execute a bash command and return formatted output."""
@@ -143,8 +180,8 @@ class AnalysisAgent:
             )
             output = f"[BASH EXIT CODE: {result.returncode}]\n"
             combined = (result.stdout or "") + (result.stderr or "")
-            if len(combined) > 4000:
-                combined = combined[:4000] + "\n... [truncated]"
+            if len(combined) > 2000:
+                combined = combined[:2000] + "\n... [truncated]"
             output += f"[BASH OUTPUT]:\n{combined}"
         except subprocess.TimeoutExpired:
             output = f"[bash: timeout after {self._bash_timeout}s]"
@@ -233,6 +270,7 @@ class AnalysisAgent:
         current_code: str,
         candidates: dict,
         split: str = "tip_of_the_tongue",
+        journal_summary: str | None = None,
     ) -> str:
         """Build the initial user message with all context."""
 
@@ -302,7 +340,10 @@ class AnalysisAgent:
         data_dir = _PROJECT_ROOT / "data" / split
         server = self._server_url
 
+        journal_section = f"\n{journal_summary}\n" if journal_summary else ""
+
         return (
+            f"{journal_section}"
             f"## Current Evaluation\n"
             f"- Recall@100: {recall_100:.4f} (baseline: {baseline_recall:.4f})\n"
             f"- nDCG@10: {ndcg_10:.4f} (baseline: {baseline_ndcg:.4f})\n"
