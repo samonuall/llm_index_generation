@@ -1,0 +1,15 @@
+# analysis_model: "openai/gpt-5-mini"
+analysis_model: "openai/gpt-5-mini"
+analysis_temperature: 1.0
+code_model: "openai/gpt-5-mini"
+code_temperature: 1.0
+api_base: "https://thekeymaker.umass.edu/"
+max_tokens: 16000
+
+server_port: 8765
+server_persist_dir: ".bm25_cache"
+
+max_hypotheses: 4
+recall_improvement_threshold: 0.00001
+analysis_max_turns: 8
+bash_timeout_seconds: 30
