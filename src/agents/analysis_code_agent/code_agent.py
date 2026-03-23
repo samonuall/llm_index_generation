@@ -356,12 +356,17 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
 
             # Load hypothesis preprocessor and run with timeout
             preprocessor = load_preprocessor_from_code(hypothesis.code)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(preprocessor.preprocess, documents)
-                try:
-                    chunks = future.result(timeout=preprocess_timeout)
-                except concurrent.futures.TimeoutError:
-                    raise RuntimeError(f"preprocess() timed out after {preprocess_timeout}s")
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = ex.submit(preprocessor.preprocess, documents)
+            try:
+                chunks = future.result(timeout=preprocess_timeout)
+            except concurrent.futures.TimeoutError:
+                # Avoid blocking indefinitely on shutdown if preprocess() is still running.
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise RuntimeError(f"preprocess() timed out after {preprocess_timeout}s")
+            else:
+                # Normal completion: wait for worker thread to finish cleanly.
+                ex.shutdown(wait=True)
 
             # Build hypothesis index on server
             client.build_index(index_name, chunks, persist=False)
