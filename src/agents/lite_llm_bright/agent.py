@@ -98,11 +98,12 @@ class LiteLLMBrightAgent(AgentRunner):
         preprocess_path = _AGENT_DIR / "preprocess.py"
         current_code = preprocess_path.read_text(encoding="utf-8").strip()
 
-        # First iteration with no results yet: just send the system instruction
+        # First iteration with no results yet: rely solely on the system instruction
+        # passed via the dedicated system role; no additional user-facing context.
         if iteration == 0 and eval_results is None and eval_error is None:
-            return self._system_instruction
+            return ""
 
-        sections: list[str] = [self._system_instruction, ""]
+        sections: list[str] = [""]
 
         # --- Run history (episodic memory across iterations) ---
         if run_history:
