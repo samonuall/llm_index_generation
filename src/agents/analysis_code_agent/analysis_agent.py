@@ -140,6 +140,8 @@ class AnalysisAgent:
             # If content policy violation, strip bash outputs from history and retry
             if "ContentPolicyViolation" in type(e).__name__ or "content_policy" in str(e).lower() or "content management policy" in str(e).lower():
                 sanitized = self._sanitize_messages(messages)
+                # Update the original messages history in place so future turns use sanitized content
+                messages[:] = sanitized
                 try:
                     return _do_call(sanitized)
                 except Exception as e2:
