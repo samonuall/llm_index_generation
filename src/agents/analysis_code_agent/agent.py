@@ -564,6 +564,8 @@ class AnalysisCodeAgent(AgentRunner):
             proven_results = [r for r in valid if r.proven]
 
             if best_hyp.delta_recall_100 > 0:
+                journal.set_iteration_adoption(i, best_hyp.hypothesis.id)
+
                 if best_hyp.regressed_query_ids:
                     print(
                         f"[agent] ⚠ Overfitting: regresses {len(best_hyp.regressed_query_ids)} queries "

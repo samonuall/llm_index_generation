@@ -109,12 +109,10 @@ class AnalysisAgent:
             bash_turns_completed += 1
             messages.append({"role": "user", "content": bash_output})
 
-        # Extract summary from last assistant message
-        summary = self._extract_summary(messages)
-
-        # If no clean summary found, ask for one
-        if not summary:
-            summary = self._request_summary(messages)
+        # Always request a dedicated final summary call.
+        # This avoids accidentally treating a planning/status assistant message
+        # as the final analysis output.
+        summary = self._request_summary(messages)
 
         return AnalysisResult(
             summary=summary,
@@ -204,8 +202,9 @@ class AnalysisAgent:
         messages.append({
             "role": "user",
             "content": (
-                "Please summarize your findings now. No more bash commands. "
-                "Provide a structured summary of failure patterns and recommendations."
+                "Now provide the FINAL analysis summary. This is a dedicated summary step. "
+                "No more bash commands. Provide a structured summary of failure patterns and "
+                "recommendations with concrete evidence (query IDs/doc IDs)."
             ),
         })
         try:
@@ -217,6 +216,24 @@ class AnalysisAgent:
                 api_base=self._api_base,
             )
             summary = response.choices[0].message.content or "No summary generated."
+            # Guardrail: if model still emits bash, retry once with stricter instruction.
+            if re.search(r"<bash>.*?</bash>", summary, re.DOTALL):
+                messages.append({"role": "assistant", "content": summary})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Do not include any <bash> blocks. Output only the final written summary."
+                    ),
+                })
+                response2 = completion(
+                    model=self._model,
+                    messages=messages,
+                    temperature=self._temperature,
+                    api_key=self._api_key,
+                    api_base=self._api_base,
+                )
+                summary = response2.choices[0].message.content or "No summary generated."
+
             messages.append({"role": "assistant", "content": summary})
             return summary
         except Exception:
