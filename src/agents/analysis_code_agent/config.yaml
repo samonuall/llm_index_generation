@@ -1,6 +1,6 @@
-analysis_model: "openai/gpt4o"
-analysis_temperature: 0.5
-code_model: "openai/gpt4o"
+analysis_model: "gpt-5-mini"
+analysis_temperature: 1.0
+code_model: "gpt-5-mini"
 code_temperature: 1.0
 api_base: "https://thekeymaker.umass.edu/"
 

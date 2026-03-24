@@ -488,7 +488,7 @@ class AnalysisCodeAgent(AgentRunner):
 
             # Hypothesis generation
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
-            persistent_fails = journal.persistent_failure_ids(min_iters=max(1, i))
+            persistent_fails = journal.persistent_failure_ids(min_iters=len(jorunal.iterations))
             query_lookup = {q.query_id: q.query_text for q in queries} if self._use_contrastive else None
             hypotheses = code_agent.generate_hypotheses(
                 analysis_result.summary,
