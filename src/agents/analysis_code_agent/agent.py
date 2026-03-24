@@ -259,8 +259,8 @@ class AnalysisCodeAgent(AgentRunner):
     # --- Logging ---
 
     def _log_analysis(self, iteration: int, analysis_result) -> None:
-        logs_dir = _AGENT_DIR / "logs"
-        logs_dir.mkdir(exist_ok=True)
+        logs_dir = self._experiment_dir
+        logs_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().isoformat(timespec="seconds")
 
         # Full conversation log
@@ -294,8 +294,8 @@ class AnalysisCodeAgent(AgentRunner):
         print(f"[agent] Analysis log: {log_path}")
 
     def _log_hypotheses(self, iteration: int, hypothesis_results: list) -> None:
-        logs_dir = _AGENT_DIR / "logs"
-        logs_dir.mkdir(exist_ok=True)
+        logs_dir = self._experiment_dir
+        logs_dir.mkdir(parents=True, exist_ok=True)
 
         data = []
         for r in hypothesis_results:
@@ -326,8 +326,8 @@ class AnalysisCodeAgent(AgentRunner):
         print(f"[agent] Hypotheses log: {log_path}")
 
     def _log_final_code(self, iteration: int, code: str) -> None:
-        logs_dir = _AGENT_DIR / "logs"
-        logs_dir.mkdir(exist_ok=True)
+        logs_dir = self._experiment_dir
+        logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / f"iteration_{iteration}_final_code.py"
         log_path.write_text(code, encoding="utf-8")
         print(f"[agent] Final code log: {log_path}")
@@ -382,6 +382,12 @@ class AnalysisCodeAgent(AgentRunner):
         out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"[agent] Results saved → {out_path}")
 
+        # Also save a copy in the experiment directory
+        if hasattr(self, '_experiment_dir') and self._experiment_dir:
+            exp_results = self._experiment_dir / "results.json"
+            exp_results.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            print(f"[agent] Results copy → {exp_results}")
+
     # --- Main loop ---
 
     def run(self, n_loops: int) -> None:
@@ -406,13 +412,20 @@ class AnalysisCodeAgent(AgentRunner):
         # Start BM25 server
         self._ensure_server_running()
 
+        # Create per-experiment log directory
+        model_name = self._config.get("code_model", "unknown_model").replace("/", "_")
+        exp_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"{model_name}_{self.condition}_{exp_timestamp}"
+        self._experiment_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[agent] Experiment logs → {self._experiment_dir}")
+
         # Create tracker + sub-agents + journal
         tracker = RunTracker()
         analysis_agent = AnalysisAgent(self._config, tracker=tracker)
         code_agent = CodeAgent(self._config, tracker=tracker)
         max_hypotheses = self._config.get("max_hypotheses", 4)
         all_past_hypotheses: list[dict] = []  # track across loops
-        journal = RunJournal(_AGENT_DIR / "logs")
+        journal = RunJournal(self._experiment_dir)
 
         # Track globally best code + recall@100 (from harness eval) across all loops
         best_recall_100: float = baseline_results.get("recall_at_k", 0.0)
@@ -426,8 +439,7 @@ class AnalysisCodeAgent(AgentRunner):
             # Full harness eval — authoritative recall@100 for this loop's starting point
             try:
                 raw_results = self.run_eval(iteration=i * 2)
-                eval_log = _AGENT_DIR / "logs" / f"iteration_{i}_eval.json"
-                eval_log.parent.mkdir(exist_ok=True)
+                eval_log = self._experiment_dir / f"iteration_{i}_eval.json"
                 eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
             except Exception as e:
                 print(f"[agent] Eval failed (loop {i + 1}): {e}")
@@ -488,7 +500,7 @@ class AnalysisCodeAgent(AgentRunner):
 
             # Hypothesis generation
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
-            persistent_fails = journal.persistent_failure_ids(min_iters=len(jorunal.iterations))
+            persistent_fails = journal.persistent_failure_ids(min_iters=len(journal.iterations))
             query_lookup = {q.query_id: q.query_text for q in queries} if self._use_contrastive else None
             hypotheses = code_agent.generate_hypotheses(
                 analysis_result.summary,
@@ -573,6 +585,8 @@ class AnalysisCodeAgent(AgentRunner):
                     )
 
                 # If multiple hypotheses proved, try synthesis instead of just picking best
+                was_synthesized = False
+                synthesized_from_ids: list[str] = []
                 if len(proven_results) > 1:
                     print(f"[agent] {len(proven_results)} hypotheses proved — attempting synthesis ...")
                     synthesized = code_agent.generate_final_code(
@@ -587,12 +601,35 @@ class AnalysisCodeAgent(AgentRunner):
                         else:
                             print(f"[agent] Adopting synthesized code.")
                             final_code = synthesized
+                            was_synthesized = True
+                            synthesized_from_ids = [r.hypothesis.id for r in proven_results]
                     else:
                         print(f"[agent] Synthesis failed — falling back to best hypothesis.")
                         final_code = best_hyp.hypothesis.code
                 else:
                     print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
                     final_code = best_hyp.hypothesis.code
+
+                # Write accepted hypothesis JSON
+                accepted_data = {
+                    "iteration": i,
+                    "adopted_hypothesis": {
+                        "id": best_hyp.hypothesis.id,
+                        "description": best_hyp.hypothesis.description,
+                        "rationale": best_hyp.hypothesis.rationale,
+                        "delta_recall_100": best_hyp.delta_recall_100,
+                        "delta_recall_10": best_hyp.delta_recall_10,
+                        "delta_ndcg_10": best_hyp.delta_ndcg_10,
+                    },
+                    "synthesized": was_synthesized,
+                    "synthesized_from": synthesized_from_ids,
+                    "proven_hypotheses": [
+                        {"id": r.hypothesis.id, "description": r.hypothesis.description}
+                        for r in proven_results
+                    ],
+                }
+                accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
+                accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
 
                 self._log_final_code(i, final_code)
                 self._write_preprocess(final_code)
@@ -603,6 +640,14 @@ class AnalysisCodeAgent(AgentRunner):
                     best_code = final_code
                     print(f"[agent] Global best updated → estimated recall@100≈{best_recall_100:.4f}")
             else:
+                # No hypothesis improved — write accepted JSON indicating no adoption
+                accepted_data = {
+                    "iteration": i,
+                    "adopted_hypothesis": None,
+                    "reason": "no improvement",
+                }
+                accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
+                accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
                 print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
 
         # Restore globally best code before final eval
