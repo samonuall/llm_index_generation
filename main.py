@@ -43,13 +43,18 @@ def main() -> None:
         "--no-query-text",
         action="store_true",
         default=False,
-        help="Omit raw query text from the prompt (use when Gemini safety filters block content)",
+        help="Omit raw query text from the prompt (use when safety filters block content)",
+    )
+    parser.add_argument(
+        "--task",
+        default="sustainable_living",
+        help="BRIGHT task/subset (used with gemini_sdk_bright / lite_llm_bright, default: sustainable_living)",
     )
     parser.add_argument(
         "--enable_tracing",
         action="store_true",
         default=False,
-        help="Enable tracing of LLM calls (only applies to lite_llm_agent)",
+        help="Enable MLflow tracing of LLM calls (only applies to lite_llm_agent)",
     )
     args = parser.parse_args()
 
@@ -106,7 +111,6 @@ def main() -> None:
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 
-    # Set the split on the agent
     agent.split = args.split
     agent.run(n_loops=args.loops)
 

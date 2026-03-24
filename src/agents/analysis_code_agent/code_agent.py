@@ -7,6 +7,7 @@ import os
 import re
 import json
 import pathlib
+import concurrent.futures
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -40,13 +41,15 @@ class HypothesisResult:
     proven: bool = False
     error: str | None = None
     notes: str = ""
+    improved_query_ids: list[str] = field(default_factory=list)
+    regressed_query_ids: list[str] = field(default_factory=list)
 
 
 class CodeAgent:
     def __init__(self, config: dict) -> None:
         self._model = config.get("code_model", "openai/gpt-4o")
         self._temperature = config.get("code_temperature", 0.7)
-        self._api_key = os.environ.get("LITELLM_API_KEY", "")
+        self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)
         self._max_hypotheses = config.get("max_hypotheses", 4)
@@ -61,14 +64,20 @@ class CodeAgent:
         current_code: str,
         n: int = 4,
         past_hypotheses: list[dict] | None = None,
+        persistent_failure_ids: list[str] | None = None,
     ) -> list[Hypothesis]:
         """Single LLM call to generate N hypotheses. Output JSON inside <hypotheses>...</hypotheses> tags."""
 
         dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
 
-        # Build past attempts section
+        # Build past attempts section with pattern diagnosis
         past_section = ""
         if past_hypotheses:
+            all_failed = all(not ph["proven"] for ph in past_hypotheses)
+            chunking_variations = sum(
+                1 for ph in past_hypotheses
+                if any(w in ph["description"].lower() for w in ["chunk", "window", "overlap", "paragraph", "sentence"])
+            )
             lines = []
             for ph in past_hypotheses:
                 lines.append(
@@ -77,12 +86,38 @@ class CodeAgent:
                     f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
                     f"proven={ph['proven']}. {ph.get('notes', '')}"
                 )
+
+            diagnosis = ""
+            if all_failed and chunking_variations >= 3:
+                diagnosis = (
+                    "\n⚠ PATTERN DETECTED: All tested hypotheses were chunking/window variations and ALL failed. "
+                    "Chunking changes alone are not the solution. You MUST try fundamentally different strategies:\n"
+                    "  - Repeating the document title/entity name at the start of every chunk\n"
+                    "  - Extracting and indexing synonyms or alternative names from the document\n"
+                    "  - Using the first sentence of the document as a standalone high-weight chunk\n"
+                    "  - Do NOT generate more chunking window variations.\n"
+                )
+            elif all_failed:
+                diagnosis = (
+                    "\n⚠ All previous hypotheses failed. Try a completely different approach — "
+                    "do not make incremental variations of what has already been tried.\n"
+                )
+
             past_section = (
                 "\n## Previously Tested Hypotheses (DO NOT repeat these)\n"
                 + "\n".join(lines)
-                + "\n\nLearn from what worked and what didn't. "
-                "Do NOT regenerate hypotheses that are similar to failed ones above.\n"
+                + diagnosis
             )
+
+        if persistent_failure_ids:
+            pf_ids_str = ", ".join(persistent_failure_ids[:30]) + ("..." if len(persistent_failure_ids) > 30 else "")
+            persistent_section = (
+                f"## Persistent Failures (failing EVERY iteration so far — highest priority)\n"
+                f"These {len(persistent_failure_ids)} query IDs have never been retrieved correctly: {pf_ids_str}\n"
+                f"At least one hypothesis MUST specifically target these queries.\n\n"
+            )
+        else:
+            persistent_section = ""
 
         prompt = f"""## Analysis Summary
 {analysis_summary}
@@ -95,7 +130,7 @@ class CodeAgent:
 ## Dataset Info
 {dataset_info}
 {past_section}
-Generate exactly {n} hypotheses to improve the preprocessing code.
+{persistent_section}Generate exactly {n} hypotheses to improve the preprocessing code.
 Each hypothesis must be a complete, working preprocess.py implementation.
 
 IMPORTANT NOTES:
@@ -268,6 +303,29 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
 
         return results if results else None
 
+    def _validate_code(self, code: str, documents: list) -> str | None:
+        """Quick exec + preprocess on a tiny sample. Returns error string or None if OK."""
+        from .eval_utils import load_preprocessor_from_code
+        try:
+            sample = documents[:20]
+            valid_doc_ids = {d.doc_id for d in sample}
+            preprocessor = load_preprocessor_from_code(code)
+            chunks = preprocessor.preprocess(sample)
+            if not chunks:
+                return "preprocess() returned empty list on sample docs"
+            for c in chunks:
+                if not hasattr(c, "doc_id") or not hasattr(c, "text"):
+                    return f"Chunk missing doc_id or text: {c}"
+                if c.doc_id not in valid_doc_ids:
+                    return (
+                        f"Chunk has invalid doc_id '{c.doc_id}' — "
+                        f"chunk.doc_id must exactly match one of the input document doc_ids. "
+                        f"Valid example: '{next(iter(valid_doc_ids))}'"
+                    )
+            return None
+        except Exception as e:
+            return str(e)
+
     def test_hypothesis(
         self,
         hypothesis: Hypothesis,
@@ -282,15 +340,33 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
         result = HypothesisResult(hypothesis=hypothesis)
         index_name = f"hyp_{hypothesis.id}"
 
+        # Validate code on tiny sample before full preprocessing
+        validation_error = self._validate_code(hypothesis.code, documents)
+        if validation_error:
+            result.error = f"Validation failed: {validation_error}"
+            result.notes = f"Code rejected at validation: {validation_error[:120]}"
+            print(f"[code_agent] {hypothesis.id} validation error: {validation_error[:120]}")
+            return result
+
+        preprocess_timeout = 60  # seconds
+
         try:
             # Always test on all queries for reliable delta measurement.
-            # The query_ids_to_test are logged but not used for filtering,
-            # since testing only on failure cases yields 0/0 comparisons.
             test_queries = queries
 
-            # Load hypothesis preprocessor from code string
+            # Load hypothesis preprocessor and run with timeout
             preprocessor = load_preprocessor_from_code(hypothesis.code)
-            chunks = preprocessor.preprocess(documents)
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = ex.submit(preprocessor.preprocess, documents)
+            try:
+                chunks = future.result(timeout=preprocess_timeout)
+            except concurrent.futures.TimeoutError:
+                # Avoid blocking indefinitely on shutdown if preprocess() is still running.
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise RuntimeError(f"preprocess() timed out after {preprocess_timeout}s")
+            else:
+                # Normal completion: wait for worker thread to finish cleanly.
+                ex.shutdown(wait=True)
 
             # Build hypothesis index on server
             client.build_index(index_name, chunks, persist=False)
@@ -315,20 +391,20 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             # Proven if recall@100 improves (more granular than @10)
             result.proven = result.delta_recall_100 >= self._recall_threshold
 
-            # Build notes
-            improved_100 = sum(
-                1
+            # Build per-query improvement/regression lists
+            result.improved_query_ids = [
+                h_q.query_id
                 for h_q, c_q in zip(hyp_eval.per_query, current_eval.per_query)
                 if h_q.hit_at_100 and not c_q.hit_at_100
-            )
-            regressed_100 = sum(
-                1
+            ]
+            result.regressed_query_ids = [
+                c_q.query_id
                 for h_q, c_q in zip(hyp_eval.per_query, current_eval.per_query)
                 if c_q.hit_at_100 and not h_q.hit_at_100
-            )
+            ]
             result.notes = (
-                f"@100: improved {improved_100}, regressed {regressed_100} of "
-                f"{len(test_queries)} queries"
+                f"@100: improved {len(result.improved_query_ids)}, "
+                f"regressed {len(result.regressed_query_ids)} of {len(test_queries)} queries"
             )
 
             print(
