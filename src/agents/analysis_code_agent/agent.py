@@ -37,10 +37,13 @@ from .run_journal import RunJournal
 from .run_tracker import RunTracker
 
 
-def _load_config() -> dict:
+def _load_config(overrides: dict | None = None) -> dict:
     config_path = _AGENT_DIR / "config.yaml"
     with config_path.open(encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    if overrides:
+        config.update({k: v for k, v in overrides.items() if v is not None})
+    return config
 
 
 def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, seed: int = 42):
@@ -107,8 +110,17 @@ def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, se
 class AnalysisCodeAgent(AgentRunner):
     agent_name = "analysis_code_agent"
 
-    def __init__(self, use_history: bool = True, use_contrastive: bool = True) -> None:
-        self._config = _load_config()
+    def __init__(self, use_history: bool = True, use_contrastive: bool = True, model: str | None = None, api_base: str | None = None) -> None:
+        overrides: dict = {}
+        if model:
+            overrides["analysis_model"] = model
+            overrides["code_model"] = model
+            # If model overridden but no explicit api_base, clear it so LiteLLM
+            # routes to the provider's native endpoint (e.g. Google for gemini/).
+            overrides["api_base"] = api_base  # None = native endpoint
+        elif api_base is not None:
+            overrides["api_base"] = api_base
+        self._config = _load_config(overrides or None)
         self._use_history = use_history
         self._use_contrastive = use_contrastive
         self._server_process = None
@@ -347,6 +359,12 @@ class AnalysisCodeAgent(AgentRunner):
             return "agent_contrastive_no_history"
         return "agent"
 
+    def _model_folder(self) -> str:
+        """Return a filesystem-safe folder name derived from the model string."""
+        model = self._config.get("code_model", "unknown")
+        # Strip provider prefix (e.g. "openai/gpt4o" → "gpt4o")
+        return model.split("/")[-1].replace(".", "-")
+
     def _write_results(
         self,
         tracker: RunTracker,
@@ -356,14 +374,15 @@ class AnalysisCodeAgent(AgentRunner):
         baseline_results: dict,
         final_results: dict | None,
     ) -> None:
-        results_dir = _PROJECT_ROOT / "results"
-        results_dir.mkdir(exist_ok=True)
+        results_dir = _PROJECT_ROOT / "results" / self._model_folder()
+        results_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = results_dir / f"{self.condition}_{timestamp}.json"
 
         metrics = final_results.get("metrics", {}) if final_results else {}
         payload = {
             "condition": self.condition,
+            "model": self._config.get("code_model"),
             "loops": n_loops,
             "split": getattr(self, "split", "tip_of_the_tongue"),
             "seed": 42,

@@ -12,7 +12,7 @@ import concurrent.futures
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
-from litellm import completion
+from .llm_call import completion
 
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
@@ -51,8 +51,10 @@ class CodeAgent:
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
         self._temperature = config.get("code_temperature", 0.7)
-        self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
-        self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
+        self._api_base = config.get("api_base")  # None = use provider's native endpoint
+        # Only pass api_key explicitly for proxy; native providers read key from env.
+        _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+        self._api_key = _proxy_key if self._api_base else None
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)
         self._max_hypotheses = config.get("max_hypotheses", 4)
 

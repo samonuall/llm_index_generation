@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from litellm import completion
+from .llm_call import completion
 
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
@@ -35,7 +35,9 @@ class AnalysisAgent:
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
         self._bash_timeout = config.get("bash_timeout_seconds", 30)
-        self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+        # Only pass api_key explicitly for proxy; native providers read key from env.
+        _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+        self._api_key = _proxy_key if config.get("api_base") else None
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
         self._server_url = f"http://localhost:{config.get('server_port', 8765)}"
 
