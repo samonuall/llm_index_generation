@@ -122,6 +122,18 @@ class RunJournal:
         self.hypotheses.append(rec)
         self.save()
 
+    def set_iteration_adoption(
+        self,
+        iteration: int,
+        adopted_hypothesis_id: Optional[str],
+    ) -> None:
+        """Update adopted hypothesis for a previously recorded iteration."""
+        for rec in self.iterations:
+            if rec.iteration == iteration:
+                rec.adopted_hypothesis_id = adopted_hypothesis_id
+                self.save()
+                return
+
     # ------------------------------------------------------------------
     # Analysis
     # ------------------------------------------------------------------

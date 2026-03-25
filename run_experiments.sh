@@ -25,6 +25,13 @@ run_experiment() {
     reset_preprocess
     uv run python main.py "$@"
     echo ">>> Done: $label"
+
+    # Generate plots for this experiment (ok if it fails)
+    LATEST_DIR=$(ls -td ablation_experiments/*_${label}_* 2>/dev/null | head -1)
+    if [ -n "$LATEST_DIR" ]; then
+        echo ">>> Generating plots for $LATEST_DIR ..."
+        uv run python src/agents/analysis_code_agent/plot_experiment.py --experiment-dir "$LATEST_DIR" || true
+    fi
 }
 
 # 1. One-shot (single LLM call, no loop)

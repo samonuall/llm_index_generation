@@ -204,3 +204,11 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"[one_shot] Results saved → {out_path}")
+
+    # --- Save to experiment directory ---
+    model_short = model.replace("/", "_")
+    experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"{model_short}_one_shot_{timestamp}"
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    (experiment_dir / "results.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (experiment_dir / "preprocess.py").write_text(code + "\n", encoding="utf-8")
+    print(f"[one_shot] Experiment logs → {experiment_dir}")
