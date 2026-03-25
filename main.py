@@ -39,8 +39,8 @@ def main() -> None:
     parser.add_argument(
         "--split",
         type=str,
-        default="tip_of_the_tongue",
-        help="CRUMB split name (default: tip_of_the_tongue)",
+        default="tip_of_the_tongue_5000docs",
+        help="CRUMB split name (default: tip_of_the_tongue_5000docs)",
     )
     parser.add_argument(
         "--no-query-text",
@@ -82,12 +82,46 @@ def main() -> None:
             import mlflow
             mlflow.litellm.autolog()
         agent = LiteLLMAgent(include_query_text=not args.no_query_text)
+    
     elif args.agent == "test_agent":
         from src.agents import LiteLLMAgent
         agent = LiteLLMAgent(include_query_text=not args.no_query_text, test_mode=True)
+    
     elif args.agent == "analysis_code_agent":
         from src.agents.analysis_code_agent import AnalysisCodeAgent
         agent = AnalysisCodeAgent()
+    
+    elif args.agent == "baseline":
+        # Import your baseline agent - adjust the import path as needed
+        try:
+            from src.agents.baseline import BaselineAgent
+            agent = BaselineAgent()
+        except ImportError:
+            try:
+                from src.preprocessing.baseline import BaselinePreprocessor
+                # If it's a preprocessor, wrap it or use directly
+                agent = BaselinePreprocessor()
+            except ImportError:
+                raise ImportError(
+                    "Could not find baseline agent. Check if the file exists in "
+                    "src/agents/baseline.py or src/preprocessing/baseline.py"
+                )
+    
+    elif args.agent == "ai_assistant":
+        # Import your AI assistant agent - adjust the import path as needed
+        try:
+            from src.agents.ai_assistant import AIAssistantAgent
+            agent = AIAssistantAgent()
+        except ImportError:
+            try:
+                from src.agents.ai_assistant_agent import AIAssistantAgent
+                agent = AIAssistantAgent()
+            except ImportError:
+                raise ImportError(
+                    "Could not find ai_assistant agent. Check if the file exists in "
+                    "src/agents/ai_assistant.py or src/agents/ai_assistant_agent.py"
+                )
+    
     else:
         raise ValueError(f"Unknown agent: {args.agent}")
 
