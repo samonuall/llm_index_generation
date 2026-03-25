@@ -2,12 +2,9 @@
 main.py – CLI entry point for LLM-driven preprocessing agents.
 
 Usage:
-    uv run python main.py --agent gemini_sdk --loops 5
-    uv run python main.py --agent gemini_sdk_bright --loops 5 --task sustainable_living
-    uv run python main.py --agent gemini_sdk_bright --loops 5 --no-query-text
-    uv run python main.py --agent lite_llm_bright --loops 5 --task biology
-    uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval
-    uv run python main.py --agent analysis_code_agent --loops 5
+    uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval_5000docs
+    uv run python main.py --agent baseline --split paper_retrieval_5000docs
+    uv run python main.py --agent ai_assistant --split paper_retrieval_5000docs --loops 3
 """
 
 import argparse
@@ -19,14 +16,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--agent",
-        default="gemini_sdk",
+        default=None,
         choices=[
             "gemini_sdk",
-            "gemini_sdk_bright",
-            "lite_llm_bright",
             "lite_llm_agent",
             "test_agent",
             "analysis_code_agent",
+            "baseline",
+            "ai_assistant",
         ],
         help="Which agent to run (default: gemini_sdk)",
     )
@@ -64,18 +61,7 @@ def main() -> None:
     if args.agent == "gemini_sdk":
         from src.agents import GeminiSdkAgent
         agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
-    elif args.agent == "gemini_sdk_bright":
-        from src.agents.gemini_sdk_bright.agent import GeminiSdkBrightAgent
-        agent = GeminiSdkBrightAgent(
-            task=args.task,
-            include_query_text=not args.no_query_text,
-        )
-    elif args.agent == "lite_llm_bright":
-        from src.agents.lite_llm_bright.agent import LiteLLMBrightAgent
-        agent = LiteLLMBrightAgent(
-            task=args.task,
-            include_query_text=not args.no_query_text,
-        )
+    
     elif args.agent == "lite_llm_agent":
         from src.agents import LiteLLMAgent
         if args.enable_tracing:
