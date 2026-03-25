@@ -1,0 +1,5 @@
+{"task": "biology", "timestamp": "2026-02-22T00:36:12", "n_loops": 5, "baseline_ndcg": 0.0774, "best_ndcg": 0.1976, "paper_bm25": 0.189, "delta_vs_baseline": 0.1202, "delta_vs_paper": 0.0086}
+{"task": "earth_science", "timestamp": "2026-02-22T00:59:47", "n_loops": 5, "baseline_ndcg": 0.1283, "best_ndcg": 0.5473, "paper_bm25": 0.272, "delta_vs_baseline": 0.4191, "delta_vs_paper": 0.2753}
+{"task": "economics", "timestamp": "2026-02-22T01:20:11", "n_loops": 5, "baseline_ndcg": 0.1026, "best_ndcg": 0.1766, "paper_bm25": 0.149, "delta_vs_baseline": 0.074, "delta_vs_paper": 0.0276}
+{"task": "psychology", "timestamp": "2026-02-22T01:39:11", "n_loops": 5, "baseline_ndcg": 0.0764, "best_ndcg": 0.2248, "paper_bm25": 0.125, "delta_vs_baseline": 0.1484, "delta_vs_paper": 0.0998}
+{"task": "robotics", "timestamp": "2026-02-22T01:49:09", "n_loops": 5, "baseline_ndcg": 0.0623, "best_ndcg": 0.1276, "paper_bm25": 0.136, "delta_vs_baseline": 0.0653, "delta_vs_paper": -0.0084}
