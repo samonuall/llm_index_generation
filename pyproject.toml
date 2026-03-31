@@ -19,3 +19,20 @@ dependencies = [
     "tqdm>=4.67.3",
     "uvicorn>=0.41.0",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-timeout>=2.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 30
+markers = [
+    "slow: marks tests that build BM25 indexes or hit real data",
+    "integration: end-to-end tests requiring data/ to exist",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-timeout>=2.4.0",
+]
