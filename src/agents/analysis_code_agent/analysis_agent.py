@@ -29,7 +29,8 @@ class AnalysisResult:
 
 
 class AnalysisAgent:
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, tracker=None) -> None:
+        self._tracker = tracker
         self._model = config.get("analysis_model", "openai/gpt-4o-mini")
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
@@ -108,12 +109,10 @@ class AnalysisAgent:
             bash_turns_completed += 1
             messages.append({"role": "user", "content": bash_output})
 
-        # Extract summary from last assistant message
-        summary = self._extract_summary(messages)
-
-        # If no clean summary found, ask for one
-        if not summary:
-            summary = self._request_summary(messages)
+        # Always request a dedicated final summary call.
+        # This avoids accidentally treating a planning/status assistant message
+        # as the final analysis output.
+        summary = self._request_summary(messages)
 
         return AnalysisResult(
             summary=summary,
@@ -124,6 +123,7 @@ class AnalysisAgent:
     def _call_llm(self, messages: list[dict], turn: int) -> str | None:
         """Call LLM with retry logic. Returns response text or None on failure."""
         def _do_call(msgs):
+            t0 = time.time()
             response = completion(
                 model=self._model,
                 messages=msgs,
@@ -131,6 +131,8 @@ class AnalysisAgent:
                 api_key=self._api_key,
                 api_base=self._api_base,
             )
+            if self._tracker:
+                self._tracker.record_llm_call(response, time.time() - t0, agent="analysis")
             return response.choices[0].message.content or ""
 
         try:
@@ -202,8 +204,9 @@ class AnalysisAgent:
         messages.append({
             "role": "user",
             "content": (
-                "Please summarize your findings now. No more bash commands. "
-                "Provide a structured summary of failure patterns and recommendations."
+                "Now provide the FINAL analysis summary. This is a dedicated summary step. "
+                "No more bash commands. Provide a structured summary of failure patterns and "
+                "recommendations with concrete evidence (query IDs/doc IDs)."
             ),
         })
         try:
@@ -215,6 +218,24 @@ class AnalysisAgent:
                 api_base=self._api_base,
             )
             summary = response.choices[0].message.content or "No summary generated."
+            # Guardrail: if model still emits bash, retry once with stricter instruction.
+            if re.search(r"<bash>.*?</bash>", summary, re.DOTALL):
+                messages.append({"role": "assistant", "content": summary})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Do not include any <bash> blocks. Output only the final written summary."
+                    ),
+                })
+                response2 = completion(
+                    model=self._model,
+                    messages=messages,
+                    temperature=self._temperature,
+                    api_key=self._api_key,
+                    api_base=self._api_base,
+                )
+                summary = response2.choices[0].message.content or "No summary generated."
+
             messages.append({"role": "assistant", "content": summary})
             return summary
         except Exception:

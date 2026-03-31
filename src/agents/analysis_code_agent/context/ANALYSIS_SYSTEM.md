@@ -27,21 +27,20 @@ Useful bash examples:
 
 Query the current BM25 index for a specific query:
 ```
-<bash>curl -s -X POST http://localhost:8765/index/current/retrieve -H 'Content-Type: application/json' -d '{"query": "your query text here", "top_k": 5}' | python3 -c "import json,sys; [print(d['doc_id'], d['score'], d['text'][:120]) for d in json.load(sys.stdin)['results']]"</bash>
+<bash>curl -s -X POST http://localhost:8765/index/current/retrieve -H 'Content-Type: application/json' -d '{"query": "your query text here", "top_k": 5}' | python3 -c "import json,sys; [print(d['doc_id'], d['score'], d['rank']) for d in json.load(sys.stdin)['results']]"</bash>
 ```
 
-Inspect a specific document by doc_id:
+Important: retrieval responses only include `doc_id`, `score`, and `rank`.
+They do NOT include `text`.
+
+Inspect one or more documents by doc_id using the analysis tool:
 ```
-<bash>python3 -c "
-import json
-target = 'SOME_DOC_ID'
-with open('data/tip_of_the_tongue/documents.jsonl') as f:
-    for line in f:
-        d = json.loads(line)
-        if d['doc_id'] == target:
-            print(d['text'][:500])
-            break
-"</bash>
+<bash>python3 src/agents/analysis_code_agent/analysis_tools/read_documents.py --doc-ids SOME_DOC_ID --chars 800</bash>
+```
+
+Inspect a list of doc IDs from a file:
+```
+<bash>python3 src/agents/analysis_code_agent/analysis_tools/read_documents.py --doc-ids-file /tmp/doc_ids.txt --chars 800</bash>
 ```
 
 Look up a query's text and gold doc:

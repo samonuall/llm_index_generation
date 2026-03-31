@@ -1,6 +1,0 @@
-# LiteLLM model identifier.
-# When using the UMass proxy (thekeymaker.umass.edu), use the model name as-is.
-# Alternatives: azure/gpt-4o, azure_ai/DeepSeek-V3-0324, bedrock/us.anthropic.claude-opus-4-1
-model: openai/gpt4o
-# Sampling temperature (0.0 = deterministic, 1.0 = default creative)
-temperature: 1.0
