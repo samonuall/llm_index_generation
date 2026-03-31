@@ -485,8 +485,6 @@ class AnalysisCodeAgent(AgentRunner):
                     eval_results=raw_results,
                     baseline_results=baseline_results,
                     current_code=current_code,
-                    documents=documents,
-                    queries=queries,
                     client=self._client,
                     split=self.split,
                     journal_summary=journal.summary_for_prompt() if self._use_history else None,

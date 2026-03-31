@@ -16,58 +16,40 @@ All sections sharing the same prefix (e.g. `"24073089"`) belong to the **same Wi
 
 ## Your Tools
 
-You can run bash commands by wrapping them in `<bash>...</bash>` tags. You MUST run bash commands to inspect actual data before drawing conclusions — do not just reason from the context summary alone.
+You have access to three structured tools that you call via the tool-calling API. Do NOT attempt to run bash commands, curl requests, or CLI scripts — use only these tools.
 
-Available resources:
-- BM25 server at http://localhost:8765
-- Data files at `data/tip_of_the_tongue/documents.jsonl` and `data/tip_of_the_tongue/queries.jsonl`
-- Standard Python and shell utilities
+### `bm25_retrieve(query, top_k=10, index_name="current")`
+Query the BM25 index and retrieve ranked results for a given query string. Returns a list of results each containing `doc_id`, `score`, and `rank`. Results do NOT include document text.
 
-Useful bash examples:
+- `query` — the query string to retrieve against
+- `top_k` — number of results to return (default 10)
+- `index_name` — which index to query (default `"current"`)
 
-Query the current BM25 index for a specific query:
-```
-<bash>curl -s -X POST http://localhost:8765/index/current/retrieve -H 'Content-Type: application/json' -d '{"query": "your query text here", "top_k": 5}' | python3 -c "import json,sys; [print(d['doc_id'], d['score'], d['rank']) for d in json.load(sys.stdin)['results']]"</bash>
-```
+### `read_file(file_path, max_chars=800, filter_id=None)`
+Read content from the data directory. `file_path` is relative to the data directory (e.g. `"documents.jsonl"`, `"queries.jsonl"`). Use `filter_id` to look up a specific entry by `doc_id` or `query_id` in JSONL files rather than reading the whole file.
 
-Important: retrieval responses only include `doc_id`, `score`, and `rank`.
-They do NOT include `text`.
+- `file_path` — path relative to the data directory
+- `max_chars` — maximum characters to return (default 800)
+- `filter_id` — a `doc_id` or `query_id` string to filter a JSONL file to a single matching entry
 
-Inspect one or more documents by doc_id using the analysis tool:
-```
-<bash>python3 src/agents/analysis_code_agent/analysis_tools/read_documents.py --doc-ids SOME_DOC_ID --chars 800</bash>
-```
+### `grep_search(pattern, file_path, max_results=10)`
+Search a data file using a regex pattern. `file_path` is relative to the data directory. Returns up to `max_results` matching lines.
 
-Inspect a list of doc IDs from a file:
-```
-<bash>python3 src/agents/analysis_code_agent/analysis_tools/read_documents.py --doc-ids-file /tmp/doc_ids.txt --chars 800</bash>
-```
-
-Look up a query's text and gold doc:
-```
-<bash>python3 -c "
-import json
-with open('data/tip_of_the_tongue/queries.jsonl') as f:
-    for line in f:
-        q = json.loads(line)
-        if q['query_id'] == 'QUERY_ID':
-            print('Query:', q.get('query_content',''))
-            print('Gold:', q['relevant_doc_ids'])
-            break
-"</bash>
-```
+- `pattern` — regex pattern to search for
+- `file_path` — path relative to the data directory
+- `max_results` — maximum number of matching lines to return (default 10)
 
 ## Your Required Process
 
 You MUST follow these steps in order:
 
 1. **Pick 3-5 of the most interesting failure cases** from the provided analysis targets
-2. **For each failure**: run bash to retrieve top-5 results for that query, then inspect the gold document. Compare what BM25 ranked first vs. what the gold doc contains.
+2. **For each failure**: use `bm25_retrieve` to retrieve top-5 results for that query, then use `read_file` with `filter_id` to inspect the gold document. Compare what BM25 ranked first vs. what the gold doc contains.
 3. **Identify the gap**: what terms appear in the top-ranked wrong doc but not in the gold doc's chunks? What query terms are missing from the gold doc entirely?
 4. **Look for patterns** across multiple failures — categorize using the taxonomy below
 5. **Only then** write your summary
 
-Do NOT write your summary before running at least 3 bash investigation turns.
+Do NOT write your summary before using tools at least 3 times to investigate failures.
 
 ## Failure Taxonomy
 
@@ -83,10 +65,8 @@ When analyzing failures, categorize them using these patterns:
 
 ## Output Format
 
-When done investigating (after bash turns), provide a structured summary with:
-- Key failure patterns identified (using taxonomy above) with **concrete evidence from your bash investigation**
+When done investigating (after tool investigation), provide a structured summary wrapped in `<summary>...</summary>` tags with:
+- Key failure patterns identified (using taxonomy above) with **concrete evidence from your tool investigation**
 - Specific query IDs and doc IDs supporting each pattern
 - Concrete recommendations for preprocessing changes
 - Priority ranking of which patterns to fix first
-
-Do NOT output any `<bash>` blocks in your final summary.

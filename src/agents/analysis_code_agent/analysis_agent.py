@@ -1,14 +1,14 @@
 """
-analysis_agent.py - Multi-turn bash-loop analysis agent.
+analysis_agent.py - Multi-turn tool-calling analysis agent.
 
-Uses LiteLLM to call a model that can run bash commands to investigate
+Uses LiteLLM to call a model that can invoke BM25/file tools to investigate
 BM25 retrieval failures and produce a structured analysis summary.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
-import subprocess
 import pathlib
 import time
 from dataclasses import dataclass
@@ -19,6 +19,10 @@ from litellm import completion
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
+
+import sys as _sys
+_sys.path.insert(0, str(_AGENT_DIR))
+from analysis_tools.tools import TOOL_SCHEMAS, dispatch_tool
 
 
 @dataclass
@@ -34,10 +38,9 @@ class AnalysisAgent:
         self._model = config.get("analysis_model", "openai/gpt-4o-mini")
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
-        self._bash_timeout = config.get("bash_timeout_seconds", 30)
+        self._min_tool_turns = config.get("min_tool_turns", 3)
         self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
-        self._server_url = f"http://localhost:{config.get('server_port', 8765)}"
 
         # Load system prompt
         system_path = _AGENT_DIR / "context" / "ANALYSIS_SYSTEM.md"
@@ -48,8 +51,6 @@ class AnalysisAgent:
         eval_results: dict,
         baseline_results: dict,
         current_code: str,
-        documents: list,
-        queries: list,
         client,
         split: str = "tip_of_the_tongue",
         journal_summary: str | None = None,
@@ -69,80 +70,107 @@ class AnalysisAgent:
             journal_summary=journal_summary,
         )
 
-        min_bash_turns = 3  # require at least this many bash turns before accepting a summary
-
         messages = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": initial_msg},
         ]
 
-        bash_turns_completed = 0
+        tool_turns = 0
+        summary_text = None
 
         for turn in range(self._max_turns):
-            # Call LLM
-            text = self._call_llm(messages, turn)
-            if text is None:
+            msg = self._call_llm(messages, turn, tools=TOOL_SCHEMAS)
+            if msg is None:
                 break
 
-            messages.append({"role": "assistant", "content": text})
+            # Append assistant message as dict (preserving tool_calls)
+            assistant_dict = {"role": "assistant", "content": msg.content}
+            if msg.tool_calls:
+                assistant_dict["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ]
+            messages.append(assistant_dict)
 
-            # Check for bash blocks
-            bash_match = re.search(r"<bash>(.*?)</bash>", text, re.DOTALL)
-            if not bash_match:
-                if bash_turns_completed < min_bash_turns:
-                    # Haven't done enough bash yet — nudge the agent to investigate
-                    nudge = (
-                        f"You haven't run enough bash commands yet ({bash_turns_completed}/{min_bash_turns} done). "
-                        f"You MUST investigate the actual data before summarizing. "
-                        f"Pick a specific failing query from the list and run the curl command to see what BM25 retrieved for it. "
-                        f"Then look at the gold document. Do NOT summarize until you have done this {min_bash_turns} times."
-                    )
-                    messages.append({"role": "user", "content": nudge})
-                    continue
-                else:
-                    # Enough bash done — this is the final summary
-                    break
+            # If tool calls present, dispatch them
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = dispatch_tool(tc.function.name, args, client=client, split=split)
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                tool_turns += 1
+                continue
 
-            # Execute bash command
-            cmd = bash_match.group(1).strip()
-            bash_output = self._run_bash(cmd)
-            bash_turns_completed += 1
-            messages.append({"role": "user", "content": bash_output})
+            # No tool calls — check for <summary> tag
+            text = msg.content or ""
+            match = re.search(r"<summary>(.*?)</summary>", text, re.DOTALL)
+            if match:
+                summary_text = match.group(1).strip()
+                break
 
-        # Always request a dedicated final summary call.
-        # This avoids accidentally treating a planning/status assistant message
-        # as the final analysis output.
-        summary = self._request_summary(messages)
+            # No summary tag — nudge if not enough tool turns
+            if tool_turns < self._min_tool_turns:
+                nudge = (
+                    f"You have only completed {tool_turns}/{self._min_tool_turns} tool-using turns. "
+                    f"Please investigate more failing queries using the available tools "
+                    f"(bm25_retrieve, read_file, grep_search) before providing your summary."
+                )
+                messages.append({"role": "user", "content": nudge})
+                continue
+
+            # Enough tool turns, no summary tag, no tool calls — exit
+            break
+
+        # If no summary found in loop, check all assistant messages for <summary>
+        if summary_text is None:
+            for m in messages:
+                if m.get("role") == "assistant" and m.get("content"):
+                    match = re.search(r"<summary>(.*?)</summary>", m["content"], re.DOTALL)
+                    if match:
+                        summary_text = match.group(1).strip()
+                        break
+
+        # If still no summary, request one
+        if summary_text is None:
+            summary_text = self._request_summary(messages)
 
         return AnalysisResult(
-            summary=summary,
-            turns=len([m for m in messages if m["role"] == "assistant"]),
+            summary=summary_text,
+            turns=len([m for m in messages if m.get("role") == "assistant"]),
             conversation=messages,
         )
 
-    def _call_llm(self, messages: list[dict], turn: int) -> str | None:
-        """Call LLM with retry logic. Returns response text or None on failure."""
+    def _call_llm(self, messages: list[dict], turn: int, tools=None):
+        """Call LLM with retry logic. Returns response message object or None."""
         def _do_call(msgs):
-            t0 = time.time()
-            response = completion(
+            kwargs = dict(
                 model=self._model,
                 messages=msgs,
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
             )
+            if tools:
+                kwargs["tools"] = tools
+            t0 = time.time()
+            response = completion(**kwargs)
             if self._tracker:
                 self._tracker.record_llm_call(response, time.time() - t0, agent="analysis")
-            return response.choices[0].message.content or ""
+            return response.choices[0].message
 
         try:
             return _do_call(messages)
         except Exception as e:
             print(f"[analysis_agent] LLM call failed (turn {turn}): {e}")
-            # If content policy violation, strip bash outputs from history and retry
             if "ContentPolicyViolation" in type(e).__name__ or "content_policy" in str(e).lower() or "content management policy" in str(e).lower():
                 sanitized = self._sanitize_messages(messages)
-                # Update the original messages history in place so future turns use sanitized content
                 messages[:] = sanitized
                 try:
                     return _do_call(sanitized)
@@ -157,56 +185,27 @@ class AnalysisAgent:
                 return None
 
     def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
-        """Return messages with bash outputs truncated to 300 chars to avoid content policy violations."""
+        """Return messages with tool results truncated to avoid content policy violations."""
         sanitized = []
         for m in messages:
-            if m["role"] == "user" and "[BASH OUTPUT]" in m.get("content", ""):
-                content = m["content"]
+            if m.get("role") == "tool":
+                content = m.get("content", "")
                 if len(content) > 400:
-                    content = content[:400] + "\n... [truncated to avoid content policy filter]"
+                    content = content[:400] + "\n... [truncated]"
                 sanitized.append({**m, "content": content})
             else:
                 sanitized.append(m)
         return sanitized
 
-    def _run_bash(self, cmd: str) -> str:
-        """Execute a bash command and return formatted output."""
-        try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=self._bash_timeout,
-                cwd=str(_PROJECT_ROOT),
-            )
-            output = f"[BASH EXIT CODE: {result.returncode}]\n"
-            combined = (result.stdout or "") + (result.stderr or "")
-            if len(combined) > 2000:
-                combined = combined[:2000] + "\n... [truncated]"
-            output += f"[BASH OUTPUT]:\n{combined}"
-        except subprocess.TimeoutExpired:
-            output = f"[bash: timeout after {self._bash_timeout}s]"
-        except Exception as e:
-            output = f"[bash: error: {e}]"
-        return output
-
-    def _extract_summary(self, messages: list[dict]) -> str:
-        """Extract the final summary from the conversation (last assistant msg without bash)."""
-        for msg in reversed(messages):
-            if msg["role"] == "assistant":
-                if not re.search(r"<bash>", msg["content"]):
-                    return msg["content"]
-        return ""
-
     def _request_summary(self, messages: list[dict]) -> str:
-        """Ask the LLM for a final summary when none was produced naturally."""
+        """Ask the LLM for a final summary when none was produced in the loop."""
         messages.append({
             "role": "user",
             "content": (
-                "Now provide the FINAL analysis summary. This is a dedicated summary step. "
-                "No more bash commands. Provide a structured summary of failure patterns and "
-                "recommendations with concrete evidence (query IDs/doc IDs)."
+                "Now provide your FINAL analysis summary. No more tool calls. "
+                "Provide a structured summary of failure patterns and recommendations "
+                "with concrete evidence (query IDs/doc IDs). "
+                "Wrap your analysis in <summary>...</summary> tags."
             ),
         })
         try:
@@ -216,16 +215,17 @@ class AnalysisAgent:
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                # No tools parameter — prevent tool calls
             )
-            summary = response.choices[0].message.content or "No summary generated."
-            # Guardrail: if model still emits bash, retry once with stricter instruction.
-            if re.search(r"<bash>.*?</bash>", summary, re.DOTALL):
-                messages.append({"role": "assistant", "content": summary})
+            msg = response.choices[0].message
+            text = msg.content or ""
+
+            # Guardrail: if LLM somehow still makes tool calls, retry with stricter instruction
+            if msg.tool_calls:
+                messages.append({"role": "assistant", "content": text})
                 messages.append({
                     "role": "user",
-                    "content": (
-                        "Do not include any <bash> blocks. Output only the final written summary."
-                    ),
+                    "content": "Do not use any tools. Output only the final written summary in <summary>...</summary> tags.",
                 })
                 response2 = completion(
                     model=self._model,
@@ -234,9 +234,16 @@ class AnalysisAgent:
                     api_key=self._api_key,
                     api_base=self._api_base,
                 )
-                summary = response2.choices[0].message.content or "No summary generated."
+                text = response2.choices[0].message.content or "No summary generated."
 
-            messages.append({"role": "assistant", "content": summary})
+            # Extract <summary> if present
+            match = re.search(r"<summary>(.*?)</summary>", text, re.DOTALL)
+            summary = match.group(1).strip() if match else text
+
+            if not summary:
+                summary = "No summary generated."
+
+            messages.append({"role": "assistant", "content": text})
             return summary
         except Exception:
             return "Analysis failed to produce summary."
@@ -254,6 +261,8 @@ class AnalysisAgent:
             baseline_r = baseline_qr.get(r["query_id"])
             if baseline_r and baseline_r.get("hit") and not r.get("hit"):
                 failures.append(r)
+
+        failures = failures[:5]
 
         # Hard negatives: missed queries, top-10 retrieved that aren't gold
         misses = [r for r in query_results if not r.get("hit")]
@@ -358,10 +367,21 @@ class AnalysisAgent:
         baseline_recall = baseline_results.get("recall_at_k", 0)
         baseline_ndcg = baseline_results.get("ndcg", 0)
 
-        data_dir = _PROJECT_ROOT / "data" / split
-        server = self._server_url
-
         journal_section = f"\n{journal_summary}\n" if journal_summary else ""
+
+        tool_section = (
+            f"## Available Tools\n"
+            f"You have three tools available (invoked via the tool-calling API, NOT via text):\n\n"
+            f"1. **bm25_retrieve(query, top_k=10, index_name=\"current\")** — "
+            f"Query the BM25 index. Returns doc_id, score, rank for each result.\n"
+            f"2. **read_file(file_path, max_chars=800, filter_id=None)** — "
+            f"Read a file from data/{split}/. file_path is relative (e.g. \"documents.jsonl\"). "
+            f"Use filter_id to look up a specific doc_id or query_id in JSONL files.\n"
+            f"3. **grep_search(pattern, file_path, max_results=10)** — "
+            f"Regex search within a data file. file_path is relative to data/{split}/.\n\n"
+            f"Investigate the failures and patterns above using these tools.\n"
+            f"When done investigating, wrap your final analysis in <summary>...</summary> tags.\n"
+        )
 
         return (
             f"{journal_section}"
@@ -381,19 +401,5 @@ class AnalysisAgent:
             f"\n"
             f"{succ_text}\n"
             f"\n"
-            f"## Available Resources\n"
-            f"- BM25 Server: {server}\n"
-            f"  - Query: `curl -X POST {server}/index/current/retrieve "
-            f"-H 'Content-Type: application/json' "
-            f"""-d '{{"query": "...", "top_k": 10}}'`\n"""
-            f"  - Or via Python: `import requests; "
-            f"r = requests.post('{server}/index/current/retrieve', "
-            f"json={{'query': '...', 'top_k': 10}}); print(r.json())`\n"
-            f"- Data files: `{data_dir}/documents.jsonl`, "
-            f"`{data_dir}/queries.jsonl`\n"
-            f"\n"
-            f"Investigate the failures and patterns above. "
-            f"Use <bash>...</bash> blocks to run commands.\n"
-            f"When done investigating, provide your final analysis summary "
-            f"(no bash block).\n"
+            f"{tool_section}"
         )
