@@ -1,460 +1,587 @@
 """
-plot_iterations.py – Visualize agent improvement over iterations
+Plot iteration results for LLM agents across experiments with baseline comparison.
 
-Creates plots showing metric evolution across iterations for agents.
-
-CLI usage:
-    # Plot iterations for a specific agent
+Usage:
+    # Plot all results (organized by split) with baseline comparison
+    python -m src.evaluation.scripts.plot_iterations
+    
+    # Filter by agent
+    python -m src.evaluation.scripts.plot_iterations --agent lite_llm_agent
+    
+    # Filter by split
+    python -m src.evaluation.scripts.plot_iterations --split code_retrieval
+    
+    # Specific agent + split
     python -m src.evaluation.scripts.plot_iterations --agent lite_llm_agent --split code_retrieval
     
-    # Plot all agents on a split (comparison)
-    python -m src.evaluation.scripts.plot_iterations --split code_retrieval --compare-all
-    
-    # Plot specific metrics only
-    python -m src.evaluation.scripts.plot_iterations --agent lite_llm_agent --split code_retrieval --metrics ndcg recall
+    # Use separate subplots instead of overlay
+    python -m src.evaluation.scripts.plot_iterations --separate-plots
     
     # Custom output directory
-    python -m src.evaluation.scripts.plot_iterations --agent lite_llm_agent --split code_retrieval --output plots/
-
-Plots saved to: results/<split>/plots/<agent>_<metric>.png
+    python -m src.evaluation.scripts.plot_iterations --output-dir my_plots
 """
 
-from __future__ import annotations
-
-import sys
-import pathlib
 import json
-import argparse
+import re
+from pathlib import Path
+from collections import defaultdict
+from dataclasses import dataclass
 from typing import List, Dict, Optional
+import argparse
 
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
-    PLOTTING_AVAILABLE = True
-except ImportError:
-    PLOTTING_AVAILABLE = False
-    print("⚠️  matplotlib not installed. Install with: pip install matplotlib")
-
-_PROJECT_ROOT = pathlib.Path(__file__).parents[3]
-RESULTS_DIR = _PROJECT_ROOT / "results"
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.gridspec import GridSpec
+import numpy as np
 
 
-def load_iteration_history(split: str, agent: str) -> Optional[Dict]:
-    """Load iteration history for an agent on a split."""
-    history_file = RESULTS_DIR / split / f"{agent}_iterations.json"
-    
-    if not history_file.exists():
-        return None
-    
-    try:
-        with history_file.open('r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading {history_file}: {e}")
-        return None
+@dataclass
+class IterationResult:
+    agent: str
+    split: str
+    iteration: int
+    n_docs: int
+    top_k: int
+    timestamp: str
+    recall_at_10: Optional[float]
+    recall_at_100: Optional[float]
+    ndcg_at_10: Optional[float]
+    n_chunks: Optional[int]
+    chunks_per_doc: Optional[float]
+    filepath: Path
 
 
-def find_all_agents_with_iterations(split: str) -> List[str]:
-    """Find all agents that have iteration histories for this split."""
-    split_dir = RESULTS_DIR / split
-    if not split_dir.exists():
-        return []
-    
-    agents = []
-    for f in split_dir.glob("*_iterations.json"):
-        agent_name = f.name.replace("_iterations.json", "")
-        agents.append(agent_name)
-    
-    return sorted(agents)
-
-def plot_single_agent(
-    history: Dict,
-    split: str,
-    agent: str,
-    metrics_to_plot: List[str],
-    output_dir: pathlib.Path
-) -> List[pathlib.Path]:
+def parse_filename(filename: str) -> Optional[Dict[str, any]]:
     """
-    Plot metrics over iterations for a single agent.
-    Creates combined view with absolute values and deltas.
+    Parse filename like: lite_llm_agent_232444docs_100_iter0.json
+    Returns: {'agent': 'lite_llm_agent', 'n_docs': 232444, 'top_k': 100, 'iteration': 0}
     """
-    if not PLOTTING_AVAILABLE:
-        print("Cannot plot: matplotlib not installed")
-        return []
-    
-    iterations = history.get('iterations', [])
-    if not iterations:
-        print(f"No iterations found for {agent}")
-        return []
-    
-    output_dir.mkdir(parents=True, exist_ok=True)
-    saved_plots = []
-    
-    # Extract data
-    iter_nums = [it.get('iteration', i+1) for i, it in enumerate(iterations)]
-    
-    # Define metrics
-    # Define ONLY performance metrics (remove chunks_per_doc)
-    metric_configs = {
-        'recall_at_10': {
-            'label': 'Recall@10',
-            'color': '#2E86AB',
-            'key': 'recall_at_10',
-            'source': 'metrics'
-        },
-        'recall_at_100': {
-            'label': 'Recall@100',
-            'color': '#A23B72',
-            'key': 'recall_at_100',
-            'source': 'metrics'
-        },
-        'ndcg_at_10': {
-            'label': 'nDCG@10',
-            'color': '#F18F01',
-            'key': 'ndcg_at_10',
-            'source': 'metrics'
+    pattern = r'^(.+?)_(\d+)docs_(\d+)_iter(\d+)\.json$'
+    match = re.match(pattern, filename)
+    if match:
+        return {
+            'agent': match.group(1),
+            'n_docs': int(match.group(2)),
+            'top_k': int(match.group(3)),
+            'iteration': int(match.group(4))
         }
+    return None
+
+
+def load_baseline_metrics(results_dir: Path, split: str, n_docs: int, top_k: int) -> Dict[str, float]:
+    """Load baseline metrics for a given split/configuration."""
+    baselines = {}
+    
+    # Try various baseline filename patterns
+    patterns = [
+        f"baseline_{n_docs}docs_{top_k}.json",
+        f"baseline_{split}_{n_docs}docs_{top_k}.json",
+        f"baseline.json"
+    ]
+    
+    # Search in split-specific directories and root
+    search_paths = [
+        results_dir / split,
+        results_dir
+    ]
+    
+    for search_path in search_paths:
+        if not search_path.exists():
+            continue
+            
+        for pattern in patterns:
+            baseline_file = search_path / pattern
+            if baseline_file.exists():
+                try:
+                    with open(baseline_file, 'r') as f:
+                        data = json.load(f)
+                        metrics = data.get('metrics', {})
+                        
+                        # Extract relevant metrics
+                        baselines['recall_at_10'] = metrics.get('recall_at_10')
+                        baselines['recall_at_100'] = metrics.get('recall_at_100')
+                        baselines['ndcg_at_10'] = metrics.get('ndcg_at_10')
+                        
+                        print(f"  📍 Loaded baseline from {baseline_file.name}")
+                        return baselines
+                except (json.JSONDecodeError, KeyError) as e:
+                    print(f"  ⚠️  Error reading {baseline_file}: {e}")
+                    continue
+    
+    return baselines
+
+
+def load_results(results_dir: Path, agent_filter: Optional[str] = None, 
+                 split_filter: Optional[str] = None) -> List[IterationResult]:
+    """Load all iteration results from JSON files."""
+    results = []
+    
+    if not results_dir.exists():
+        print(f"⚠️  Results directory not found: {results_dir}")
+        return results
+    
+    for json_file in results_dir.rglob("*.json"):
+        parsed = parse_filename(json_file.name)
+        if not parsed:
+            continue
+            
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            # Apply filters
+            if agent_filter and data.get('agent') != agent_filter:
+                continue
+            if split_filter and data.get('split') != split_filter:
+                continue
+            
+            metrics = data.get('metrics', {})
+            config = data.get('config', {})
+            
+            result = IterationResult(
+                agent=data.get('agent'),
+                split=data.get('split'),
+                iteration=data.get('iteration', parsed['iteration']),
+                n_docs=config.get('n_docs', parsed['n_docs']),
+                top_k=config.get('top_k', parsed['top_k']),
+                timestamp=data.get('timestamp'),
+                recall_at_10=metrics.get('recall_at_10'),
+                recall_at_100=metrics.get('recall_at_100'),
+                ndcg_at_10=metrics.get('ndcg_at_10'),
+                n_chunks=config.get('n_chunks'),
+                chunks_per_doc=config.get('chunks_per_doc'),
+                filepath=json_file
+            )
+            results.append(result)
+            
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"⚠️  Skipping {json_file.name}: {e}")
+            continue
+    
+    return results
+
+
+def group_by_experiment(results: List[IterationResult]) -> Dict[str, List[IterationResult]]:
+    """Group results by (agent, split, n_docs, top_k)."""
+    groups = defaultdict(list)
+    for r in results:
+        key = (r.agent, r.split, r.n_docs, r.top_k)
+        groups[key].append(r)
+    
+    # Sort each group by iteration
+    for key in groups:
+        groups[key].sort(key=lambda x: x.iteration)
+    
+    return dict(groups)
+
+
+def calculate_improvements(results: List[IterationResult], metric: str) -> Dict[str, any]:
+    """Calculate best-so-far trajectory and improvement stats."""
+    values = [getattr(r, metric) for r in results if getattr(r, metric) is not None]
+    if not values:
+        return None
+    
+    # For recall/ndcg, higher is better
+    best_so_far = []
+    current_best = -np.inf
+    accepted_indices = []
+    
+    for i, val in enumerate(values):
+        if val > current_best:
+            current_best = val
+            accepted_indices.append(i)
+        best_so_far.append(current_best)
+    
+    initial = values[0]
+    final = values[-1]
+    best = max(values)
+    improvement = ((final - initial) / initial * 100) if initial != 0 else 0
+    
+    return {
+        'values': values,
+        'best_so_far': best_so_far,
+        'accepted_indices': accepted_indices,
+        'initial': initial,
+        'final': final,
+        'best': best,
+        'improvement_pct': improvement,
+        'n_experiments': len(values)
+    }
+
+
+def plot_overlaid_metrics(ax, results: List[IterationResult], metrics_to_plot: List[str],
+                          baselines: Dict[str, float] = None):
+    """Plot all metrics overlaid on a single axis with baseline comparison."""
+    
+    metric_configs = {
+        'recall_at_10': {'label': 'Recall@10', 'color': '#00ff00', 'marker': 'o'},
+        'recall_at_100': {'label': 'Recall@100', 'color': '#00ccff', 'marker': 's'},
+        'ndcg_at_10': {'label': 'nDCG@10', 'color': '#ff6600', 'marker': '^'}
     }
     
-    # Filter to requested metrics
-    if metrics_to_plot and 'all' not in metrics_to_plot:
-        metric_configs = {k: v for k, v in metric_configs.items() if k in metrics_to_plot}
+    has_data = False
+    all_values = []
+    best_overall = {'metric': None, 'value': -np.inf, 'iter': None}
     
-    # =========================================================================
-    # COMBINED PLOT: Absolute values + Delta bars
-    # =========================================================================
+    if baselines is None:
+        baselines = {}
     
-    fig = plt.figure(figsize=(18, 8))
-    gs = fig.add_gridspec(1, 2, width_ratios=[2, 1], wspace=0.3)
-    
-    # Left subplot: All metrics over iterations (normalized to 0-100 scale)
-    ax1 = fig.add_subplot(gs[0])
-    
-    # Store original values and deltas
-    all_values = {}
-    deltas = {}
-    
-    for metric_name, config in metric_configs.items():
-        # Extract values
-        if config['source'] == 'config':
-            values = [it['config'].get(config['key'], 0) for it in iterations]
-        else:
-            values = [it['metrics'].get(config['key'], 0) for it in iterations]
-        
-        all_values[metric_name] = values
-        
-        # Calculate delta
-        if len(values) > 1:
-            deltas[metric_name] = values[-1] - values[0]
-        else:
-            deltas[metric_name] = 0
-        
-        # Normalize to percentage of initial value for better visualization
-        if values[0] != 0:
-            normalized = [(v / values[0]) * 100 for v in values]
-        else:
-            normalized = [v * 100 for v in values]
-        
-        # Plot
-        ax1.plot(iter_nums, normalized,
-                marker='o',
-                linewidth=2.5,
-                markersize=8,
-                color=config['color'],
-                label=config['label'],
-                alpha=0.9)
-    
-    ax1.set_xlabel('Iteration', fontsize=13, fontweight='bold')
-    ax1.set_ylabel('Normalized Value (% of Initial)', fontsize=13, fontweight='bold')
-    ax1.set_title(f'Metric Evolution Over Iterations\n{agent} on {split}',
-                  fontsize=15, fontweight='bold', pad=20)
-    ax1.grid(True, alpha=0.3, linestyle='--')
-    ax1.set_xticks(iter_nums)
-    ax1.legend(loc='best', fontsize=11, framealpha=0.95)
-    ax1.axhline(y=100, color='gray', linestyle=':', alpha=0.5, linewidth=1)
-    
-    # Right subplot: Delta (improvement) as horizontal bar chart
-    ax2 = fig.add_subplot(gs[1])
-    
-    metric_labels = [config['label'] for config in metric_configs.values()]
-    delta_values = list(deltas.values())
-    colors_list = [config['color'] for config in metric_configs.values()]
-    
-    bars = ax2.barh(metric_labels, delta_values, color=colors_list, alpha=0.8, edgecolor='black')
-    
-    # Add value labels on bars
-    for i, (bar, delta) in enumerate(zip(bars, delta_values)):
-        width = bar.get_width()
-        label_x = width + (0.002 if width > 0 else -0.002)
-        ha = 'left' if width > 0 else 'right'
-        
-        # Show absolute delta and percentage change
-        original = all_values[list(metric_configs.keys())[i]][0]
-        if original != 0:
-            pct_change = (delta / original) * 100
-            label_text = f'{delta:+.4f}\n({pct_change:+.1f}%)'
-        else:
-            label_text = f'{delta:+.4f}'
-        
-        ax2.text(label_x, bar.get_y() + bar.get_height()/2,
-                label_text,
-                ha=ha, va='center',
-                fontsize=10,
-                fontweight='bold')
-    
-    ax2.axvline(x=0, color='black', linewidth=1.5, linestyle='-')
-    ax2.set_xlabel('Δ (Change from Iter 1 to Final)', fontsize=13, fontweight='bold')
-    ax2.set_title('Total Improvement', fontsize=15, fontweight='bold', pad=20)
-    ax2.grid(True, axis='x', alpha=0.3, linestyle='--')
-    
-    # Color the background based on positive/negative
-    xlim = ax2.get_xlim()
-    ax2.axvspan(0, xlim[1], alpha=0.1, color='green')
-    ax2.axvspan(xlim[0], 0, alpha=0.1, color='red')
-    
-    plt.tight_layout()
-    
-    # Save combined plot
-    combined_path = output_dir / f"{agent}_combined.png"
-    plt.savefig(combined_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    saved_plots.append(combined_path)
-    print(f"✓ Saved combined plot: {combined_path}")
-    
-    # =========================================================================
-    # ABSOLUTE VALUES PLOT (all on one graph - single axis)
-    # =========================================================================
-
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    for metric_name, config in metric_configs.items():
-        values = all_values[metric_name]
-        ax.plot(iter_nums, values,
-            marker='o',
-            linewidth=2.5,
-            markersize=8,
-            color=config['color'],
-            label=config['label'],
-            alpha=0.9)
-        
-        # Add value labels
-        for x, y in zip(iter_nums, values):
-            ax.annotate(f'{y:.4f}',
-                        xy=(x, y),
-                        xytext=(0, 8),
-                        textcoords='offset points',
-                        ha='center',
-                        fontsize=9,
-                        bbox=dict(boxstyle='round,pad=0.3',
-                                facecolor='white',
-                                edgecolor=config['color'],
-                                alpha=0.7))
-
-    ax.set_xlabel('Iteration', fontsize=13, fontweight='bold')
-    ax.set_ylabel('Metric Value', fontsize=13, fontweight='bold')
-    ax.grid(True, alpha=0.3, linestyle='--')
-    ax.set_xticks(iter_nums)
-    ax.legend(loc='best', fontsize=12, framealpha=0.95)
-
-    plt.title(f'Retrieval Metrics Over Iterations\n{agent} on {split}',
-            fontsize=15, fontweight='bold', pad=20)
-    plt.tight_layout()
-
-    # Save
-    absolute_path = output_dir / f"{agent}_absolute.png"
-    plt.savefig(absolute_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    saved_plots.append(absolute_path)
-    print(f"✓ Saved absolute values plot: {absolute_path}")
-    
-    # =========================================================================
-    # DELTA ONLY PLOT (bar chart with all metrics)
-    # =========================================================================
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    metric_labels = [config['label'] for config in metric_configs.values()]
-    delta_values = list(deltas.values())
-    colors_list = [config['color'] for config in metric_configs.values()]
-    
-    bars = ax.bar(range(len(metric_labels)), delta_values, 
-                  color=colors_list, alpha=0.8, edgecolor='black', linewidth=2)
-    
-    # Add value labels on bars
-    for i, (bar, delta) in enumerate(zip(bars, delta_values)):
-        height = bar.get_height()
-        label_y = height + (0.002 if height > 0 else -0.002)
-        va = 'bottom' if height > 0 else 'top'
-        
-        # Show absolute delta and percentage change
-        original = all_values[list(metric_configs.keys())[i]][0]
-        if original != 0:
-            pct_change = (delta / original) * 100
-            label_text = f'{delta:+.4f}\n({pct_change:+.1f}%)'
-        else:
-            label_text = f'{delta:+.4f}'
-        
-        ax.text(bar.get_x() + bar.get_width()/2, label_y,
-               label_text,
-               ha='center', va=va,
-               fontsize=11,
-               fontweight='bold')
-    
-    ax.axhline(y=0, color='black', linewidth=2, linestyle='-')
-    ax.set_xticks(range(len(metric_labels)))
-    ax.set_xticklabels(metric_labels, fontsize=12, fontweight='bold')
-    ax.set_ylabel('Δ (Improvement)', fontsize=13, fontweight='bold')
-    ax.set_title(f'Total Improvement Across All Metrics\n{agent} on {split}',
-                fontsize=15, fontweight='bold', pad=20)
-    ax.grid(True, axis='y', alpha=0.3, linestyle='--')
-    
-    # Color background
-    ylim = ax.get_ylim()
-    ax.axhspan(0, ylim[1], alpha=0.1, color='green')
-    ax.axhspan(ylim[0], 0, alpha=0.1, color='red')
-    
-    plt.tight_layout()
-    
-    # Save
-    delta_path = output_dir / f"{agent}_delta.png"
-    plt.savefig(delta_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    saved_plots.append(delta_path)
-    print(f"✓ Saved delta plot: {delta_path}")
-    
-    return saved_plots
-
-
-def plot_comparison(
-    histories: Dict[str, Dict],
-    split: str,
-    metric: str,
-    output_dir: pathlib.Path
-) -> pathlib.Path:
-    """
-    Plot comparison of multiple agents on the same metric.
-    
-    Args:
-        histories: Dict of {agent_name: history_dict}
-        split: Split name
-        metric: Metric to compare (e.g., 'ndcg_at_10')
-        output_dir: Where to save plot
-    """
-    if not PLOTTING_AVAILABLE:
-        return None
-    
-    fig, ax = plt.subplots(figsize=(12, 7))
-    
-    colors = ['#2E86AB', '#A23B72', '#F18F01', '#06A77D', '#C73E1D', '#6A4C93']
-    
-    for idx, (agent, history) in enumerate(histories.items()):
-        iterations = history.get('iterations', [])
-        if not iterations:
+    for metric in metrics_to_plot:
+        stats = calculate_improvements(results, metric)
+        if not stats:
             continue
         
-        iter_nums = [it.get('iteration', i+1) for i, it in enumerate(iterations)]
+        has_data = True
+        config = metric_configs.get(metric, {'label': metric, 'color': 'white', 'marker': 'o'})
+        iterations = list(range(len(stats['values'])))
+        all_values.extend(stats['values'])
         
-        # Extract values
-        if metric == 'chunks_per_doc':
-            values = [it['config'].get(metric, 0) for it in iterations]
-        else:
-            values = [it['metrics'].get(metric, 0) for it in iterations]
+        # Add baseline to all_values for y-axis scaling
+        if metric in baselines and baselines[metric] is not None:
+            all_values.append(baselines[metric])
         
-        color = colors[idx % len(colors)]
-        ax.plot(iter_nums, values,
-                marker='o',
-                linewidth=2.5,
-                markersize=8,
-                color=color,
-                label=agent,
-                alpha=0.8)
+        # Track best overall across all metrics
+        if stats['best'] > best_overall['value']:
+            best_overall = {
+                'metric': config['label'],
+                'value': stats['best'],
+                'iter': stats['values'].index(stats['best'])
+            }
+        
+        # Plot baseline as dotted horizontal line
+        if metric in baselines and baselines[metric] is not None:
+            baseline_val = baselines[metric]
+            ax.axhline(y=baseline_val, color=config['color'], linestyle=':', 
+                      linewidth=2.5, alpha=0.7, zorder=1,
+                      label=f"{config['label']} Baseline ({baseline_val:.4f})")
+        
+        # Plot all experiments as semi-transparent dots
+        ax.scatter(iterations, stats['values'], 
+                  c=config['color'], alpha=0.3, s=50, 
+                  marker=config['marker'], zorder=2)
+        
+        # Plot best-so-far line
+        ax.plot(iterations, stats['best_so_far'], 
+               color=config['color'], linewidth=2.5, 
+               label=f"{config['label']} (best: {stats['best']:.4f})", 
+               zorder=3)
+        
+        # Highlight accepted/improved experiments
+        accepted_iters = stats['accepted_indices']
+        accepted_vals = [stats['values'][i] for i in accepted_iters]
+        ax.scatter(accepted_iters, accepted_vals, 
+                  c=config['color'], edgecolors='white',
+                  s=120, zorder=4, linewidth=1.5, marker=config['marker'],
+                  alpha=0.9)
     
-    ax.set_xlabel('Iteration', fontsize=12, fontweight='bold')
-    ax.set_ylabel(metric.replace('_', ' ').title(), fontsize=12, fontweight='bold')
-    ax.set_title(f"{metric.replace('_', ' ').title()} Comparison\n{split}", 
-                 fontsize=14, fontweight='bold', pad=20)
+    if not has_data:
+        ax.text(0.5, 0.5, 'No metrics data', ha='center', va='center', 
+                transform=ax.transAxes, fontsize=12, color='gray')
+        return
+    
+    # Mark overall best with star
+    if best_overall['iter'] is not None:
+        ax.scatter([best_overall['iter']], [best_overall['value']], 
+                  marker='*', s=500, c='gold', edgecolors='white', 
+                  linewidth=2, zorder=5, label=f"Best: {best_overall['metric']}")
+    
+    # Add stats text with baseline comparison
+    n_iterations = len(results)
+    stats_text = f"Iterations: {n_iterations}\n"
+    
+    for metric in metrics_to_plot:
+        stats = calculate_improvements(results, metric)
+        if stats:
+            config = metric_configs.get(metric, {'label': metric})
+            baseline_val = baselines.get(metric)
+            
+            if baseline_val is not None:
+                # Handle zero baseline
+                if baseline_val == 0:
+                    if stats['best'] > 0:
+                        stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}% (vs baseline: +∞)\n"
+                    else:
+                        stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}% (baseline was 0)\n"
+                else:
+                    vs_baseline = ((stats['best'] - baseline_val) / baseline_val * 100)
+                    stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}% (vs baseline: {vs_baseline:+.1f}%)\n"
+            else:
+                stats_text += f"{config['label']}: {stats['improvement_pct']:+.1f}%\n"
+    
+    ax.text(0.02, 0.98, stats_text.strip(), transform=ax.transAxes, 
+            fontsize=9, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='black', alpha=0.8),
+            color='white', family='monospace')
+    
+    # Styling
+    ax.set_xlabel('Iteration', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Metric Value', fontsize=11, fontweight='bold')
     ax.grid(True, alpha=0.3, linestyle='--')
-    ax.legend(loc='best', fontsize=10, framealpha=0.9)
+    ax.set_facecolor('#1a1a1a')
     
-    plt.tight_layout()
+    # Force integer x-axis
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.set_xlim(-0.5, len(results) - 0.5)
     
-    filename = f"comparison_{metric}.png"
-    save_path = output_dir / filename
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    # Legend (place outside to avoid clutter)
+    ax.legend(loc='center left', fontsize=8, framealpha=0.9, 
+             bbox_to_anchor=(1.02, 0.5))
+    
+    # Set y-axis limits with padding
+    if all_values:
+        y_min, y_max = min(all_values), max(all_values)
+        y_range = y_max - y_min
+        if y_range > 0:
+            ax.set_ylim(max(0, y_min - 0.1 * y_range), 
+                       min(1, y_max + 0.05 * y_range))
+        else:
+            ax.set_ylim(0, 1)
+
+
+def plot_metric_trajectory(ax, results: List[IterationResult], metric: str, 
+                          metric_label: str, baseline_value: Optional[float] = None):
+    """Plot single metric trajectory with baseline comparison."""
+    stats = calculate_improvements(results, metric)
+    if not stats:
+        ax.text(0.5, 0.5, f'No {metric} data', ha='center', va='center', 
+                transform=ax.transAxes, fontsize=12, color='gray')
+        return
+    
+    iterations = list(range(len(stats['values'])))
+    
+    # Plot baseline as dotted horizontal line
+    if baseline_value is not None:
+        ax.axhline(y=baseline_value, color='gray', linestyle=':', 
+                  linewidth=2.5, alpha=0.8, zorder=1,
+                  label=f'Baseline ({baseline_value:.4f})')
+    
+    # Plot all experiments as gray dots
+    ax.scatter(iterations, stats['values'], c='gray', alpha=0.5, s=60, 
+               label='Experiments', zorder=2)
+    
+    # Plot best-so-far line
+    ax.plot(iterations, stats['best_so_far'], 'b-', linewidth=2.5, 
+            label='Best so far', zorder=3)
+    
+    # Highlight accepted/improved experiments
+    accepted_iters = stats['accepted_indices']
+    accepted_vals = [stats['values'][i] for i in accepted_iters]
+    ax.scatter(accepted_iters, accepted_vals, c='lime', edgecolors='darkgreen',
+               s=100, label='Accepted', zorder=4, linewidth=1.5)
+    
+    # Mark final best with star
+    best_iter = stats['values'].index(stats['best'])
+    ax.scatter([best_iter], [stats['best']], marker='*', s=400, 
+               c='white', edgecolors='black', linewidth=2, zorder=5)
+    
+    # Add stats text with baseline comparison
+    stats_text = (
+        f"Experiment: {len(iterations)} iterations\n"
+        f"Best {metric_label}: {stats['best']:.4f}\n"
+    )
+    
+    if baseline_value is not None:
+        # Handle zero baseline
+        if baseline_value == 0:
+            if stats['best'] > 0:
+                stats_text += f"vs Baseline: +∞\n"
+            else:
+                stats_text += f"Baseline was 0\n"
+        else:
+            vs_baseline = ((stats['best'] - baseline_value) / baseline_value * 100)
+            stats_text += f"vs Baseline: {vs_baseline:+.1f}%\n"
+    
+    stats_text += f"Improvement: {stats['improvement_pct']:+.1f}%"
+    
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+            fontsize=10, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='black', alpha=0.7),
+            color='white', family='monospace')
+    
+    # Styling
+    ax.set_xlabel('Iteration', fontsize=11, fontweight='bold')
+    ax.set_ylabel(metric_label, fontsize=11, fontweight='bold')
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.set_facecolor('#1a1a1a')
+    
+    # Force integer x-axis
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.set_xlim(-0.5, len(stats['values']) - 0.5)
+    
+    # Legend
+    ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+    
+    # Set y-axis limits with some padding (include baseline in range)
+    all_vals = stats['values'][:]
+    if baseline_value is not None:
+        all_vals.append(baseline_value)
+    
+    y_min, y_max = min(all_vals), max(all_vals)
+    y_range = y_max - y_min
+    if y_range > 0:
+        ax.set_ylim(y_min - 0.1 * y_range, y_max + 0.05 * y_range)
+
+
+def create_experiment_plot(results: List[IterationResult], exp_key: tuple, 
+                           metrics_to_plot: List[str], output_path: Optional[Path] = None,
+                           separate_plots: bool = False, results_dir: Path = None):
+    """Create plot for a single experiment with baseline comparison."""
+    agent, split, n_docs, top_k = exp_key
+    
+    # Load baseline metrics
+    baselines = {}
+    if results_dir:
+        baselines = load_baseline_metrics(results_dir, split, n_docs, top_k)
+    
+    # Filter metrics that have data
+    available_metrics = []
+    metric_labels = {
+        'recall_at_10': f'Recall@10',
+        'recall_at_100': f'Recall@100',
+        'ndcg_at_10': 'nDCG@10'
+    }
+    
+    for metric in metrics_to_plot:
+        if any(getattr(r, metric) is not None for r in results):
+            available_metrics.append(metric)
+    
+    if not available_metrics:
+        print(f"⚠️  No metrics data for {agent}/{split}")
+        return
+    
+    # Create figure with dark background
+    if separate_plots:
+        n_metrics = len(available_metrics)
+        fig = plt.figure(figsize=(14, 4 * n_metrics))
+        fig.patch.set_facecolor('#0d0d0d')
+        
+        # Title
+        title = f"{agent.replace('_', ' ').title()}: {split.replace('_', ' ').title()}"
+        fig.suptitle(title, fontsize=16, fontweight='bold', color='white', y=0.98)
+        
+        # Create subplots
+        gs = GridSpec(n_metrics, 1, figure=fig, hspace=0.3)
+        
+        for i, metric in enumerate(available_metrics):
+            ax = fig.add_subplot(gs[i])
+            ax.set_facecolor('#1a1a1a')
+            
+            # Set spine colors
+            for spine in ax.spines.values():
+                spine.set_edgecolor('#333333')
+            
+            # Set tick colors
+            ax.tick_params(colors='white', which='both')
+            
+            baseline_val = baselines.get(metric)
+            plot_metric_trajectory(ax, results, metric, metric_labels[metric], baseline_val)
+        
+        footer_y = 0.01
+    else:
+        # Overlaid plot - need wider figure for legend
+        fig, ax = plt.subplots(figsize=(16, 8))
+        fig.patch.set_facecolor('#0d0d0d')
+        ax.set_facecolor('#1a1a1a')
+        
+        # Title
+        title = f"{agent.replace('_', ' ').title()}: {split.replace('_', ' ').title()}"
+        fig.suptitle(title, fontsize=16, fontweight='bold', color='white', y=0.96)
+        
+        # Set spine colors
+        for spine in ax.spines.values():
+            spine.set_edgecolor('#333333')
+        
+        # Set tick colors
+        ax.tick_params(colors='white', which='both')
+        
+        plot_overlaid_metrics(ax, results, available_metrics, baselines)
+        
+        footer_y = 0.02
+    
+    # Add footer with experiment details
+    footer_text = f"Documents: {n_docs:,} | Top-k: {top_k} | Iterations: {len(results)}"
+    if baselines:
+        footer_text += " | ⋯ Dotted lines = original baseline"
+    fig.text(0.5, footer_y, footer_text, ha='center', fontsize=10, 
+             color='gray', family='monospace')
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, facecolor='#0d0d0d', 
+                    bbox_inches='tight', pad_inches=0.2)
+        print(f"✅ Saved: {output_path}")
+    else:
+        plt.show()
+    
     plt.close()
-    
-    print(f"✓ Saved comparison: {save_path}")
-    return save_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot agent iteration metrics")
-    parser.add_argument("--agent", type=str, help="Agent name")
-    parser.add_argument("--split", type=str, required=True, help="Split name")
-    parser.add_argument("--compare-all", action="store_true", 
-                       help="Compare all agents on this split")
-    parser.add_argument("--metrics", nargs='+', 
-                       default=['all'],
-                       choices=['all', 'recall_at_10', 'recall_at_100', 'ndcg_at_10', 'chunks_per_doc'],
-                       help="Which metrics to plot")
-    parser.add_argument("--output", type=str, 
-                       help="Custom output directory (default: results/<split>/plots/)")
+    parser = argparse.ArgumentParser(
+        description="Plot iteration results for LLM preprocessing agents with baseline comparison",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    parser.add_argument('--agent', type=str, help='Filter by agent name')
+    parser.add_argument('--split', type=str, help='Filter by split name')
+    parser.add_argument('--results-dir', type=Path, default=Path('results'),
+                       help='Directory containing result JSON files')
+    parser.add_argument('--output', type=Path, help='Output file path (if not set, shows interactive plot)')
+    parser.add_argument('--metrics', nargs='+', 
+                       default=['recall_at_10', 'recall_at_100', 'ndcg_at_10'],
+                       help='Metrics to plot')
+    parser.add_argument('--output-dir', type=Path, default=Path('results_graphs'),
+                       help='Base directory for saving plots (organized by split)')
+    parser.add_argument('--separate-plots', action='store_true',
+                       help='Use separate subplots for each metric instead of overlaying')
     
     args = parser.parse_args()
     
-    if not PLOTTING_AVAILABLE:
-        print("ERROR: matplotlib is required. Install with: pip install matplotlib")
-        sys.exit(1)
+    # Load results
+    print(f"📊 Loading results from {args.results_dir}...")
+    results = load_results(args.results_dir, args.agent, args.split)
     
-    # Determine output directory
-    if args.output:
-        output_dir = pathlib.Path(args.output)
+    if not results:
+        print("❌ No results found matching filters")
+        return
+    
+    print(f"✅ Loaded {len(results)} result files")
+    
+    # Group by experiment
+    experiments = group_by_experiment(results)
+    print(f"📈 Found {len(experiments)} unique experiment(s):")
+    for (agent, split, n_docs, top_k), exp_results in experiments.items():
+        print(f"  • {agent}/{split} ({n_docs} docs, top-{top_k}): {len(exp_results)} iterations")
+    
+    # Create plots
+    if len(experiments) == 1 and args.output:
+        # Single experiment with explicit output path
+        exp_key, exp_results = list(experiments.items())[0]
+        create_experiment_plot(exp_results, exp_key, args.metrics, args.output, 
+                             args.separate_plots, args.results_dir)
+    elif len(experiments) == 1 and not args.output:
+        # Single experiment, show interactively
+        exp_key, exp_results = list(experiments.items())[0]
+        create_experiment_plot(exp_results, exp_key, args.metrics, None, 
+                             args.separate_plots, args.results_dir)
     else:
-        output_dir = RESULTS_DIR / args.split / "plots"
-    
-    if args.compare_all:
-        # Compare all agents
-        agents = find_all_agents_with_iterations(args.split)
-        if not agents:
-            print(f"No agents with iteration histories found for split: {args.split}")
-            sys.exit(1)
+        # Multiple experiments - organize by split
+        print(f"\n📁 Saving plots to {args.output_dir}/")
+        for exp_key, exp_results in experiments.items():
+            agent, split, n_docs, top_k = exp_key
+            
+            # Organize: results_graphs/{split}/{agent}_{n_docs}docs_top{top_k}.png
+            split_dir = args.output_dir / split
+            filename = f"{agent}_{n_docs}docs_top{top_k}.png"
+            output_path = split_dir / filename
+            
+            create_experiment_plot(exp_results, exp_key, args.metrics, output_path, 
+                                 args.separate_plots, args.results_dir)
         
-        print(f"Found {len(agents)} agents with iterations: {', '.join(agents)}")
-        
-        histories = {}
-        for agent in agents:
-            history = load_iteration_history(args.split, agent)
-            if history:
-                histories[agent] = history
-        
-        if not histories:
-            print("Could not load any iteration histories")
-            sys.exit(1)
-        
-        # Plot comparison for each metric
-        metrics = ['ndcg_at_10', 'recall_at_10', 'recall_at_100', 'chunks_per_doc']
-        if args.metrics and 'all' not in args.metrics:
-            metrics = args.metrics
-        
-        for metric in metrics:
-            plot_comparison(histories, args.split, metric, output_dir)
-    
-    elif args.agent:
-        # Single agent plots
-        history = load_iteration_history(args.split, args.agent)
-        if not history:
-            print(f"No iteration history found for {args.agent} on {args.split}")
-            print(f"Expected file: {RESULTS_DIR / args.split / f'{args.agent}_iterations.json'}")
-            sys.exit(1)
-        
-        plot_single_agent(history, args.split, args.agent, args.metrics, output_dir)
-    
-    else:
-        print("ERROR: Must specify --agent or --compare-all")
-        sys.exit(1)
-    
-    print(f"\n✓ All plots saved to: {output_dir}")
+        print(f"\n✅ Generated {len(experiments)} plot(s)")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

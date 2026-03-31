@@ -19,6 +19,7 @@ data/*/*.jsonl
 *.zip
 *.whl
 results/*/
+results_graphs/*/
 
 # Temp files
 *.tmp

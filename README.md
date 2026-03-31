@@ -62,9 +62,12 @@ llm_index_generation/
     │   ├── schema.py                  # Data classes: Document, Chunk, EvalQuery
     │   ├── base.py                    # BasePreprocessor ABC
     │   └── scripts/
-    |       └── aggregate_results.py             # Compare results across splits/agents
-    │       ├── get_data.py            # One-time data download from HuggingFace
+    |       └── aggregate_results.py             # Compare results across splits/agents                
+    │       ├── archive_agent_iterations.py # Archive old iterations
     │       ├── build_index.py         # BM25 index builder (bm25s + English stemmer)
+    │       ├── cleanup_iterations.py  # Cleanup old iterations
+    │       ├── get_data.py            # One-time data download from HuggingFace
+    │       ├── plot_iterations.py     # Creates plots for each split based on final results from each iteration
     │       └── test_preprocessing_split.py  # Eval harness: Recall@k + MRR
     └── agents/
         ├── CONTEXT.md                 # Dataset and interface docs for agent prompts
@@ -126,17 +129,20 @@ uv sync
 
 ## Download Data
 
-Download individual splits (full corpus + queries) to /data/**
-```
-uv run python -m src.evaluation.scripts.get_data_extended --split paper_retrieval
-uv run python -m src.evaluation.scripts.get_data_extended --split tip_of_the_tongue
-uv run python -m src.evaluation.scripts.get_data_extended --split clinical_trial
-uv run python -m src.evaluation.scripts.get_data_extended --split code_retrieval
-uv run python -m src.evaluation.scripts.get_data_extended --split theorem_retrieval
-uv run python -m src.evaluation.scripts.get_data_extended --split stack_exchange
-uv run python -m src.evaluation.scripts.get_data_extended --split legal_qa
-uv run python -m src.evaluation.scripts.get_data_extended --split set_operation_entity_retrieval
-```
+Download corpus + queries for CRUMB benchmark splits to `/data/`
+
+### Download Full Splits
+
+Download complete datasets (all documents + queries):
+
+```bash
+# Single split
+uv run python -m src.evaluation.scripts.get_data --split paper_retrieval
+
+# All splits
+for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
+  uv run python -m src.evaluation.scripts.get_data --split $split
+done
 
 ## Running Evaluations
 
@@ -297,6 +303,14 @@ These scripts help you manage the full lifecycle of agent experiments:
 - Calls official CRUMB eval library for benchmark metrics
 - Tracks iterations when called from agent runner
 - Saves multiple output formats (JSON, CRUMB JSONL, query results)
+
+
+## Visualizing Iteration Results
+
+### Plot Agent Progress Over Iterations
+
+The `plot_iterations.py` script creates visualizations showing how metrics improve over agent iterations, styled like autonomous ML research plots.
+
 
 **Usage:**
 
