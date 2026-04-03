@@ -2,7 +2,9 @@
 
 ## Overview
 
-Comprehensive test suite ensuring data reliability and code correctness throughout the analysis pipeline.
+The test suite is organized to validate the project from the bottom up, starting with the data layer and building toward evaluation and agent behavior. The data layer tests ensure the pipeline can reliably fetch (mocked), transform, cache, and persist CRUMB-style documents and queries in the exact JSONL formats the rest of the system expects. Concretely, these tests check that raw HuggingFace dataset rows are converted into canonical documents.jsonl and queries.jsonl records (correct field mapping, qrels filtering, limits), that cache hits prevent unnecessary “downloads,” and that the pipeline behaves predictably end-to-end when run repeatedly.
+
+Above that, the evaluation tests verify the static harness assumptions: schema correctness, preprocessor interface compliance, data quality rules, and cross-module integration so retrieval metrics are computed on valid inputs. Finally, the agent tests focus on agent-specific utilities (like BM25 client wrappers and evaluation helpers) to make sure the iterative loop has correct tooling and doesn’t break when the underlying evaluation outputs change. Together, this structure isolates failures: data issues are caught before they cascade into retrieval or agent logic, making debugging faster and results more trustworthy.
 
 # 1. Data Layer Tests
 
@@ -33,13 +35,75 @@ tests/
     └── test_eval_utils.py                         # Test evaluation utilities
 ```
 
-### Description
+## Bulleted Description
 
-The data layer test suite ensures end-to-end data reliability from initial loading through processing to final output. Tests are distributed across `test_data_layer.py`, which covers core data access operations and database interactions, and the `evaluation/` directory, which focuses on data quality and integrity.
+tests/conftest.py
 
-The `test_get_data.py` file validates data loading mechanisms, cache management, and file system operations, ensuring data can be reliably retrieved from various sources. Schema validation is handled by `test_schema.py`, which enforces data type consistency and validates schema evolution over time.
+Central place for shared pytest fixtures (synthetic documents/queries/chunks, temp directories, mock datasets).
+Ensures tests are fast, deterministic, and offline, without requiring CRUMB downloads.
+tests/TESTS_README.md
 
-The most comprehensive data integrity testing occurs in `test_data_quality_validation.py`, which monitors data health at each iteration. This includes detecting missing values, identifying duplicates, flagging statistical outliers, and tracking quality degradation over time. The tests also validate that critical data properties (row counts, column names, ID ranges) remain invariant across processing steps and detect distribution shifts that might indicate data drift or corruption. Together, these tests ensure that invalid or corrupted data never progresses through the pipeline to produce misleading results.
+Human-readable guide to the test suite: what each group covers, how to run them, expected behavior, and debugging tips.
+Data layer tests (tests/data/)
+These validate the “data plumbing” that feeds the evaluation harness: writing/reading JSONL, mapping HF dataset rows into the repo’s canonical formats, and ensuring cache + pipeline behavior is correct.
+
+tests/data/test_data_loader.py
+
+Tests data loading entrypoints (e.g., loading from HuggingFace via load_dataset, loading from local cached JSONL).
+Verifies correct behavior for cache-hit vs cache-miss, limits (n_queries, limit), and failure cases—without making network calls (by mocking).
+tests/data/test_data_storage.py
+
+Tests persistence format and correctness of writing/reading JSONL artifacts.
+Verifies the produced files are valid JSONL, contain required keys, and support round-trip integrity (write → read preserves fields).
+tests/data/test_data_transformation.py
+
+Tests the mapping/normalization logic inside the loader layer (in your case, get_data.py):
+qrels fallback order (passage_qrels → full_document_qrels → empty)
+filtering to label > 0
+output shape for queries (query_id, query_content, relevant_doc_ids)
+corpus row mapping (document_id → doc_id as string, document_content → text, metadata default)
+Ensures you get consistent “canonical” records regardless of raw input shape.
+tests/data/test_data_cache.py
+
+Tests the caching contract:
+correct cache directory naming (including the _<n_docs>docs suffix)
+reading cached JSONL when it exists (no dataset calls)
+writing cache files on cache miss
+cache separation by split and limit (no collisions)
+tests/data/test_data_pipeline.py
+
+Tests the end-to-end data workflow (pipeline-style):
+cache dir creation → queries load → corpus load → JSONL artifacts exist
+second run uses cache (no “downloads”)
+sanity checks like “relevant_doc_ids exist in docs” when the dataset supports it
+documents the expected behavior when --limit is too small (relevance coverage may break)
+Evaluation tests (tests/evaluation/)
+These validate the static evaluation harness expectations and correctness around schemas, preprocessing interfaces, and evaluation integration.
+
+tests/evaluation/test_base_preprocessor.py
+
+Ensures preprocessors conform to the BasePreprocessor interface and expected invariants.
+tests/evaluation/test_data_quality_validation.py
+
+Checks data quality rules (IDs unique, required fields present, chunk/doc alignment, etc.) so eval results are meaningful.
+tests/evaluation/test_get_data.py
+
+Tests the get_data.py script/functions from the evaluation layer perspective (CLI behavior, retrieval logic, expected outputs).
+tests/evaluation/test_pipeline_integration.py
+
+Smoke/integration coverage across components (data → preprocess → index → eval), meant to catch wiring issues.
+tests/evaluation/test_schema.py
+
+Validates the schema dataclasses and fixture conformance (e.g., required keys, references valid).
+Agent tests (tests/agents/analysis_code_agent/)
+These validate agent-specific helper modules (not the static harness).
+
+tests/agents/analysis_code_agent/test_bm25_client.py
+
+Tests agent-side BM25 client behavior (request/response, ranking handling, error behavior).
+tests/agents/analysis_code_agent/test_eval_utils.py
+
+Tests agent-side evaluation utilities (metric calculations, formatting, result parsing, etc.).
 
 
 ## Running Tests
