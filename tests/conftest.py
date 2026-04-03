@@ -29,13 +29,19 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = pathlib.Path(__file__).parents[1]
-_EVAL_DIR = _PROJECT_ROOT / "src" / "evaluation"
+_SRC_DIR = _PROJECT_ROOT / "src"
+_EVAL_DIR = _SRC_DIR / "evaluation"
 _SCRIPTS_DIR = _EVAL_DIR / "scripts"
-_AGENTS_DIR = _PROJECT_ROOT / "src" / "agents"
+_AGENTS_DIR = _SRC_DIR / "agents"
 
-sys.path.insert(0, str(_EVAL_DIR))
-sys.path.insert(0, str(_SCRIPTS_DIR))
-sys.path.insert(0, str(_AGENTS_DIR))
+# Add project root first so 'src' module is importable
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# Add specific directories for direct imports (backward compatibility)
+for path in [_EVAL_DIR, _SCRIPTS_DIR, _AGENTS_DIR]:
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from schema import Document, Chunk, EvalQuery  # noqa: E402
 
@@ -69,7 +75,7 @@ def sample_queries() -> List[EvalQuery]:
             q = json.loads(line)
             queries.append(EvalQuery(
                 query_id=q["query_id"],
-                query_text=q["query_content"],
+                query_text=q["query_content"],    # ✅ CORRECT
                 relevant_doc_ids=q["relevant_doc_ids"],
             ))
     return queries
@@ -199,3 +205,42 @@ def mock_eval_results() -> dict:
         },
         "crumb_metrics": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Data layer fixtures (for testing data loading and storage)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_crumb_dataset():
+    """Mock CRUMB dataset for testing data loading without network calls."""
+    return [
+        {
+            "query_id": "q1",
+            "query_content": "What is machine learning?",
+            "passage_qrels": [{"id": "doc1", "label": 1}],
+        },
+        {
+            "query_id": "q2",
+            "query_content": "Python programming tutorial",
+            "passage_qrels": [{"id": "doc2", "label": 1}],
+        },
+    ]
+
+
+@pytest.fixture
+def mock_crumb_corpus():
+    """Mock CRUMB corpus for testing document loading."""
+    return [
+        {"document_id": "doc1", "document_content": "Machine learning is a subset of AI."},
+        {"document_id": "doc2", "document_content": "Python is a programming language."},
+        {"document_id": "doc3", "document_content": "Data science uses statistics."},
+    ]
+
+
+@pytest.fixture
+def temp_cache_dir(tmp_path):
+    """Temporary cache directory for testing data caching."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
