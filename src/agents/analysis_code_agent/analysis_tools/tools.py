@@ -2,6 +2,8 @@
 
 Three tools are exposed via LiteLLM's OpenAI-compatible tool-calling API so the
 LLM can investigate BM25 retrieval failures without arbitrary shell access.
+
+When tools change, make sure to update the prompt in src/agents/analysis_code_agent/analysis_agent.py under the build_initial_context() function.
 """
 
 import json
