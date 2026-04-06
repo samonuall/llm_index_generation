@@ -174,6 +174,73 @@ def tmp_data_dir(tmp_path, sample_documents, sample_queries) -> pathlib.Path:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
+def mock_eval_results_with_queries() -> dict:
+    """
+    Eval results dict with per-query results for testing _build_candidates.
+    Mix of hits, misses, and varying ranks.
+    """
+    return {
+        "agent": "test_agent",
+        "split": "test_split",
+        "metrics": {
+            "recall_at_10": 0.50,
+            "recall_at_100": 0.625,
+            "ndcg_at_10": 0.45,
+        },
+        "query_results": [
+            # q1: miss (was hit in baseline → regression)
+            {"query_id": "q1", "query_text": "furry pet animal", "hit": False, "rank": None,
+             "relevant_doc_ids": ["doc_001"], "retrieved_doc_ids": ["doc_003", "doc_004", "doc_005"]},
+            # q2: hit at rank 5
+            {"query_id": "q2", "query_text": "planets orbiting the sun", "hit": True, "rank": 5,
+             "relevant_doc_ids": ["doc_002"], "retrieved_doc_ids": ["doc_006", "doc_007", "doc_008", "doc_009", "doc_002"]},
+            # q3: miss (was also miss in baseline → NOT regression)
+            {"query_id": "q3", "query_text": "interpreted language", "hit": False, "rank": None,
+             "relevant_doc_ids": ["doc_003"], "retrieved_doc_ids": ["doc_001", "doc_004"]},
+            # q4: hit at rank 1
+            {"query_id": "q4", "query_text": "green plants sunlight", "hit": True, "rank": 1,
+             "relevant_doc_ids": ["doc_005"], "retrieved_doc_ids": ["doc_005", "doc_002"]},
+            # q5: miss (was hit in baseline → regression)
+            {"query_id": "q5", "query_text": "tallest mountain Nepal", "hit": False, "rank": None,
+             "relevant_doc_ids": ["doc_007"], "retrieved_doc_ids": ["doc_008", "doc_006"]},
+            # q6: hit at rank 8
+            {"query_id": "q6", "query_text": "deep ocean fish", "hit": True, "rank": 8,
+             "relevant_doc_ids": ["doc_006"], "retrieved_doc_ids": ["doc_001", "doc_002", "doc_003", "doc_004", "doc_005", "doc_007", "doc_008", "doc_006"]},
+            # q7: hit at rank 2
+            {"query_id": "q7", "query_text": "ancient Rome gladiators", "hit": True, "rank": 2,
+             "relevant_doc_ids": ["doc_008"], "retrieved_doc_ids": ["doc_003", "doc_008"]},
+            # q8: miss (not in baseline at all → NOT regression)
+            {"query_id": "q8", "query_text": "quantum mechanics wave", "hit": False, "rank": None,
+             "relevant_doc_ids": ["doc_004"], "retrieved_doc_ids": ["doc_001", "doc_006", "doc_007"]},
+        ],
+    }
+
+
+@pytest.fixture
+def mock_baseline_results() -> dict:
+    """
+    Baseline results paired with mock_eval_results_with_queries.
+    q1 and q5 were hits in baseline but misses in current (regressions).
+    q3 was a miss in both (not a regression).
+    q8 is absent from baseline (not a regression).
+    """
+    return {
+        "recall_at_k": 0.7143,
+        "ndcg": 0.55,
+        "query_results": [
+            {"query_id": "q1", "hit": True, "rank": 3, "retrieved_doc_ids": ["doc_002", "doc_003", "doc_001"]},
+            {"query_id": "q2", "hit": True, "rank": 2, "retrieved_doc_ids": ["doc_006", "doc_002"]},
+            {"query_id": "q3", "hit": False, "rank": None, "retrieved_doc_ids": ["doc_001"]},
+            {"query_id": "q4", "hit": True, "rank": 1, "retrieved_doc_ids": ["doc_005"]},
+            {"query_id": "q5", "hit": True, "rank": 4, "retrieved_doc_ids": ["doc_001", "doc_002", "doc_003", "doc_007"]},
+            {"query_id": "q6", "hit": True, "rank": 6, "retrieved_doc_ids": ["doc_001", "doc_002", "doc_003", "doc_004", "doc_005", "doc_006"]},
+            {"query_id": "q7", "hit": True, "rank": 1, "retrieved_doc_ids": ["doc_008"]},
+            # q8 intentionally absent from baseline
+        ],
+    }
+
+
+@pytest.fixture
 def mock_eval_results() -> dict:
     """
     A realistic eval results dict matching the shape returned by

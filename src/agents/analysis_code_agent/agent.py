@@ -250,6 +250,45 @@ class AnalysisCodeAgent(AgentRunner):
 
     # --- Preprocessing helper ---
 
+    def _compute_baseline(self) -> dict:
+        """Run baseline preprocessor on the current sampled corpus via BM25 server.
+
+        Overrides AgentRunner._compute_baseline() so that baseline results are
+        computed on the exact same document set as the current eval (R1.B).
+        """
+        from .eval_utils import run_subset_eval
+
+        _EVAL_DIR = _PROJECT_ROOT / "src" / "evaluation"
+        _AGENTS_DIR = _PROJECT_ROOT / "src" / "agents"
+        for p in [str(_EVAL_DIR), str(_AGENTS_DIR)]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+        from baseline.preprocess import Preprocessor as BaselinePreprocessor
+
+        if self._documents is None or self._queries is None:
+            raise RuntimeError("_compute_baseline() called before documents/queries were loaded.")
+
+        baseline_preprocessor = BaselinePreprocessor()
+        baseline_chunks = baseline_preprocessor.preprocess(self._documents)
+        print(f"[agent] Baseline: {len(baseline_chunks)} chunks from {len(self._documents)} docs")
+        self._client.build_index("baseline", baseline_chunks, persist=False)
+
+        baseline_summary = run_subset_eval("baseline", self._queries, self._client, top_k=100)
+        return {
+            "recall_at_k": baseline_summary.recall_at_100,
+            "ndcg": baseline_summary.ndcg_at_10,
+            "query_results": [
+                {
+                    "query_id": pq.query_id,
+                    "hit": pq.hit_at_100,
+                    "rank": pq.rank,
+                    "retrieved_doc_ids": pq.retrieved_doc_ids,
+                }
+                for pq in baseline_summary.per_query
+            ],
+        }
+
     def _preprocess_with_current_code(self, documents: list, current_code: str) -> list:
         """Load preprocessor from current code and run it on documents."""
         from .eval_utils import load_preprocessor_from_code
@@ -393,24 +432,24 @@ class AnalysisCodeAgent(AgentRunner):
     def run(self, n_loops: int) -> None:
         """Override AgentRunner.run() with analysis+hypothesis loop."""
 
-        # Load baseline results
-        baseline_path = pathlib.Path(__file__).parent.parent / "baseline_results.json"
-        print(f"\n{'#'*60}")
-        print(f"# Baseline (raw documents, no preprocessing) — from baseline_results.json")
-        print(f"{'#'*60}")
-        baseline_results = json.loads(baseline_path.read_text(encoding="utf-8"))
-        print(f"  Recall@100 : {baseline_results['recall_at_k']:.4f}")
-        print(f"  nDCG@10    : {baseline_results['ndcg']:.4f}")
-
         # Load data
         max_distractors = self._config.get("max_distractors", 9000)
-        documents, queries = _load_data(self.split, max_distractors=max_distractors)
+        seed = self._config.get("seed", 42)
+        documents, queries = _load_data(self.split, max_distractors=max_distractors, seed=seed)
         self._documents = documents
         self._queries = queries
         print(f"[agent] Loaded {len(documents)} documents, {len(queries)} queries.")
 
-        # Start BM25 server
+        # Start BM25 server (must be up before baseline eval)
         self._ensure_server_running()
+
+        # Compute baseline by running baseline preprocessor on the current corpus
+        print(f"\n{'#'*60}")
+        print(f"# Baseline (raw documents, no preprocessing) — computed on current corpus")
+        print(f"{'#'*60}")
+        baseline_results = self._compute_baseline()
+        print(f"  Recall@100 : {baseline_results['recall_at_k']:.4f}")
+        print(f"  nDCG@10    : {baseline_results['ndcg']:.4f}")
 
         # Create per-experiment log directory
         model_name = self._config.get("code_model", "unknown_model").replace("/", "_")
