@@ -85,8 +85,13 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None) -> 
         miss_ids = []
 
     # --- Build prompt ---
+    from .analysis_agent import load_corpus_description
     system_prompt = (_AGENT_DIR / "context" / "CODE_SYSTEM.md").read_text(encoding="utf-8")
-    context_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+    context_info = (
+        (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+        + "\n"
+        + load_corpus_description(split)
+    )
     current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
 
     miss_section = ""
@@ -99,7 +104,7 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None) -> 
         )
 
     prompt = f"""## Task
-You are given a BM25 retrieval system over a pre-chunked Wikipedia corpus.
+You are given a BM25 retrieval system over a document corpus.
 The current preprocessing achieves:
   - Recall@100: {baseline_recall:.4f}
   - nDCG@10:    {baseline_ndcg:.4f}

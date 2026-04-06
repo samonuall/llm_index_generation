@@ -47,7 +47,7 @@ class HypothesisResult:
 
 
 class CodeAgent:
-    def __init__(self, config: dict, tracker=None) -> None:
+    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue") -> None:
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
         self._temperature = config.get("code_temperature", 0.7)
@@ -55,6 +55,7 @@ class CodeAgent:
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)
         self._max_hypotheses = config.get("max_hypotheses", 4)
+        self._split = split
 
         # Load system prompt
         system_path = _AGENT_DIR / "context" / "CODE_SYSTEM.md"
@@ -71,7 +72,12 @@ class CodeAgent:
     ) -> list[Hypothesis]:
         """Single LLM call to generate N hypotheses. Output JSON inside <hypotheses>...</hypotheses> tags."""
 
-        dataset_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+        from .analysis_agent import load_corpus_description
+        dataset_info = (
+            (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+            + "\n"
+            + load_corpus_description(self._split)
+        )
 
         # Build past attempts section with pattern diagnosis
         past_section = ""
