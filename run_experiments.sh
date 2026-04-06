@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # run_experiments.sh — Run all ablation conditions from a clean baseline each time.
-# Usage: bash run_experiments.sh
+# Usage: bash run_experiments.sh [SPLIT]
+#   SPLIT: CRUMB split name (default: tip_of_the_tongue_5000docs)
 # Results are written to results/{condition}_{timestamp}.json
 
 set -euo pipefail
+
+SPLIT="${1:-tip_of_the_tongue_5000docs}"
 
 BASELINE_PREPROCESS="src/agents/baseline/preprocess.py"
 AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
@@ -36,27 +39,27 @@ run_experiment() {
 
 # 1. One-shot (single LLM call, no loop)
 run_experiment "one_shot" \
-    --agent one_shot
+    --agent one_shot --split "$SPLIT"
 
 # 2. Agent — no history, no contrastive
 run_experiment "agent" \
-    --agent analysis_code_agent --loops 3 --condition agent
+    --agent analysis_code_agent --loops 3 --condition agent --split "$SPLIT"
 
 # 3. Agent + History
 run_experiment "agent_history" \
-    --agent analysis_code_agent --loops 3 --condition agent_history
+    --agent analysis_code_agent --loops 3 --condition agent_history --split "$SPLIT"
 
 # 4. Agent + Contrastive (no history)
 run_experiment "agent_contrastive_no_history" \
-    --agent analysis_code_agent --loops 3 --condition agent_contrastive_no_history
+    --agent analysis_code_agent --loops 3 --condition agent_contrastive_no_history --split "$SPLIT"
 
 # 5. Agent + History + Contrastive (3 loops)
 run_experiment "agent_contrastive" \
-    --agent analysis_code_agent --loops 3 --condition agent_contrastive
+    --agent analysis_code_agent --loops 3 --condition agent_contrastive --split "$SPLIT"
 
 # 6. Agent + History + Contrastive (7 loops)
 run_experiment "agent_contrastive_7loops" \
-    --agent analysis_code_agent --loops 7 --condition agent_contrastive
+    --agent analysis_code_agent --loops 7 --condition agent_contrastive --split "$SPLIT"
 
 echo ""
 echo "=============================================="

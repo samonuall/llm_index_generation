@@ -2,12 +2,14 @@
 
 ## Dataset
 
-- **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb), `tip_of_the_tongue` split
-- **Corpus**: Full Wikipedia articles. Each `Document` has:
+- **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb)
+- **Corpus**: Text documents. Each `Document` has:
   - `doc_id` (str): unique identifier
-  - `text` (str): full article text (can be very long)
-  - `metadata` (dict): extra fields from the source dataset
-- **Queries**: 5 natural-language "tip of the tongue" descriptions of Wikipedia entities. Each has one or more `relevant_doc_ids`.
+  - `text` (str): document text
+  - `metadata` (dict): extra fields from the source dataset (may be empty)
+- **Queries**: Natural-language queries, each with one or more `relevant_doc_ids`.
+
+The specific split (task) is set at runtime via `--split`. Corpus structure varies by split — refer to the analysis agent's system prompt for split-specific details.
 
 ## Preprocessor Interface
 

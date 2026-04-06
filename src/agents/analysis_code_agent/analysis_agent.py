@@ -33,7 +33,7 @@ class AnalysisResult:
 
 
 class AnalysisAgent:
-    def __init__(self, config: dict, tracker=None) -> None:
+    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue") -> None:
         self._tracker = tracker
         self._model = config.get("analysis_model", "openai/gpt-4o-mini")
         self._temperature = config.get("analysis_temperature", 0.3)
@@ -42,9 +42,22 @@ class AnalysisAgent:
         self._api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
 
-        # Load system prompt
+        # Load system prompt, injecting per-split corpus description
+        import re as _re
         system_path = _AGENT_DIR / "context" / "ANALYSIS_SYSTEM.md"
-        self._system_prompt = system_path.read_text(encoding="utf-8")
+        template = system_path.read_text(encoding="utf-8")
+
+        corpus_desc_dir = _AGENT_DIR / "context" / "corpus_descriptions"
+        corpus_desc_path = corpus_desc_dir / f"{split}.md"
+        if not corpus_desc_path.exists():
+            # Strip doc-count suffix (e.g. tip_of_the_tongue_5000docs → tip_of_the_tongue)
+            base_split = _re.sub(r"_\d+docs$", "", split)
+            corpus_desc_path = corpus_desc_dir / f"{base_split}.md"
+        if not corpus_desc_path.exists():
+            corpus_desc_path = corpus_desc_dir / "tip_of_the_tongue.md"
+        corpus_desc = corpus_desc_path.read_text(encoding="utf-8")
+
+        self._system_prompt = template.replace("{{CORPUS_DESCRIPTION}}", corpus_desc)
 
     def analyze(
         self,

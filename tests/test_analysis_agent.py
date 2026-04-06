@@ -199,6 +199,19 @@ class TestConfigDefaults:
         with pytest.raises(FileNotFoundError):
             AnalysisAgent(config={})
 
+    def test_default_split_injects_tip_of_the_tongue_corpus_description(self):
+        # Default split should resolve to the Wikipedia/tip_of_the_tongue description.
+        agent = AnalysisAgent(config={})
+        assert "Wikipedia" in agent._system_prompt
+
+    def test_clinical_trial_split_injects_different_corpus_description(self):
+        # clinical_trial split should inject clinical trial corpus text, not Wikipedia.
+        agent_tot = AnalysisAgent(config={})
+        agent_ct = AnalysisAgent(config={}, split="clinical_trial")
+        assert agent_tot._system_prompt != agent_ct._system_prompt
+        assert "clinical trial" in agent_ct._system_prompt.lower()
+        assert "Wikipedia" not in agent_ct._system_prompt
+
 
 # ---------------------------------------------------------------------------
 # R2: _build_candidates
