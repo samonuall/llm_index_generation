@@ -17,10 +17,10 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[4]
 # ---------------------------------------------------------------------------
 
 
-def bm25_retrieve(client, query: str, top_k: int = 10, index_name: str = "current") -> str:
-    """Query a BM25 index and return results as JSON."""
+def bm25_retrieve(client, query: str, top_k: int = 10) -> str:
+    """Query the current BM25 index and return results as JSON."""
     try:
-        results = client.retrieve(name=index_name, query=query, top_k=top_k)
+        results = client.retrieve(name="current", query=query, top_k=top_k)
         return json.dumps(results)
     except Exception as e:
         return f"Error running bm25_retrieve: {e}"
@@ -119,7 +119,6 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "query": {"type": "string", "description": "The query text to search"},
                     "top_k": {"type": "integer", "description": "Number of results to return (default 10)"},
-                    "index_name": {"type": "string", "description": "Which BM25 index to query (default 'current')"},
                 },
                 "required": ["query"],
             },
@@ -171,7 +170,6 @@ def dispatch_tool(name: str, args: dict, client, split: str) -> str:
             client=client,
             query=args["query"],
             top_k=args.get("top_k", 10),
-            index_name=args.get("index_name", "current"),
         )
     elif name == "read_file":
         return read_file(

@@ -392,8 +392,8 @@ class AnalysisAgent:
         tool_section = (
             f"## Available Tools\n"
             f"You have three tools available (invoked via the tool-calling API, NOT via text):\n\n"
-            f"1. **bm25_retrieve(query, top_k=10, index_name=\"current\")** — "
-            f"Query the BM25 index. Returns doc_id, score, rank for each result.\n"
+            f"1. **bm25_retrieve(query, top_k=10)** — "
+            f"Query the current BM25 index. Returns doc_id, score, rank for each result.\n"
             f"2. **read_file(file_path, max_chars=800, filter_id=None)** — "
             f"Read a file from data/{split}/. file_path is relative (e.g. \"documents.jsonl\"). "
             f"Use filter_id to look up a specific doc_id or query_id in JSONL files.\n"
