@@ -648,7 +648,21 @@ class AnalysisCodeAgent(AgentRunner):
                     print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
                     final_code = best_hyp.hypothesis.code
 
-                # Write accepted hypothesis JSON
+                # Write candidate code and run authoritative harness eval
+                self._log_final_code(i, final_code)
+                self._write_preprocess(final_code)
+                print("[agent] Running authoritative harness eval on candidate code ...")
+                try:
+                    candidate_results = self.run_eval(iteration=i * 2 + 1)
+                    candidate_recall_100 = candidate_results["metrics"]["recall_at_100"]
+                    print(f"[agent] Candidate recall@100={candidate_recall_100:.4f} "
+                          f"(global best so far: {best_recall_100:.4f})")
+                except Exception as e:
+                    print(f"[agent] Harness eval of candidate failed: {e} — reverting to pre-loop code.")
+                    self._write_preprocess(current_code)
+                    continue
+
+                # Write accepted hypothesis JSON with authoritative recall
                 accepted_data = {
                     "iteration": i,
                     "adopted_hypothesis": {
@@ -665,18 +679,19 @@ class AnalysisCodeAgent(AgentRunner):
                         {"id": r.hypothesis.id, "description": r.hypothesis.description}
                         for r in proven_results
                     ],
+                    "candidate_recall_100": candidate_recall_100,
+                    "global_best_recall_100_before": best_recall_100,
                 }
                 accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
                 accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
 
-                self._log_final_code(i, final_code)
-                self._write_preprocess(final_code)
-
-                new_recall_estimate = loop_start_recall_100 + best_hyp.delta_recall_100
-                if new_recall_estimate > best_recall_100:
-                    best_recall_100 = new_recall_estimate
+                if candidate_recall_100 > best_recall_100:
+                    best_recall_100 = candidate_recall_100
                     best_code = final_code
-                    print(f"[agent] Global best updated → estimated recall@100≈{best_recall_100:.4f}")
+                    print(f"[agent] Global best updated → recall@100={best_recall_100:.4f}")
+                else:
+                    print(f"[agent] Candidate did not beat global best — reverting preprocess.py.")
+                    self._write_preprocess(current_code)
             else:
                 # No hypothesis improved — write accepted JSON indicating no adoption
                 accepted_data = {
@@ -687,13 +702,6 @@ class AnalysisCodeAgent(AgentRunner):
                 accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
                 accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
                 print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
-
-        # Restore globally best code before final eval
-        # (guards against a later loop degrading what an earlier loop achieved)
-        current_final_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
-        if best_code != current_final_code:
-            print(f"\n[agent] Restoring globally best code (estimated recall@100≈{best_recall_100:.4f})")
-            self._write_preprocess(best_code)
 
         # Final eval
         print(f"\n{'#'*60}")
