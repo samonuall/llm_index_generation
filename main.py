@@ -52,8 +52,8 @@ def main() -> None:
     parser.add_argument(
         "--split",
         type=str,
-        default="tip_of_the_tongue_5000docs",
-        help="CRUMB split name (default: tip_of_the_tongue_5000docs)",
+        default="tip_of_the_tongue",
+        help="CRUMB split name (default: tip_of_the_tongue)",
     )
     parser.add_argument(
         "--no-query-text",

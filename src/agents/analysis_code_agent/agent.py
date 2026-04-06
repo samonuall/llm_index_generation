@@ -307,21 +307,22 @@ class AnalysisCodeAgent(AgentRunner):
         with log_path.open("w", encoding="utf-8") as f:
             f.write(f"=== Analysis Agent | Iteration {iteration} | {timestamp} ===\n\n")
 
-            # Context summary
-            n_turns = 0
-            for msg in analysis_result.conversation:
-                if msg["role"] == "system":
-                    continue
-                elif msg["role"] == "user" and n_turns == 0:
-                    f.write("--- CONTEXT SUMMARY ---\n")
-                    f.write(msg["content"][:500] + "\n...\n\n")
-                    n_turns += 1
-                elif msg["role"] == "assistant":
-                    f.write(f"--- TURN {n_turns} ---\n")
-                    f.write(f"[ASSISTANT]: {msg['content']}\n\n")
-                    n_turns += 1
-                elif msg["role"] == "user":
-                    f.write(f"{msg['content']}\n\n")
+            for i, msg in enumerate(analysis_result.conversation):
+                role = msg.get("role", "unknown").upper()
+                f.write(f"--- MESSAGE {i} [{role}] ---\n")
+
+                if msg.get("content"):
+                    f.write(f"{msg['content']}\n")
+
+                if msg.get("tool_calls"):
+                    for tc in msg["tool_calls"]:
+                        fn = tc.get("function", {})
+                        f.write(f"[TOOL CALL] id={tc.get('id')} name={fn.get('name')} args={fn.get('arguments')}\n")
+
+                if role == "TOOL":
+                    f.write(f"[TOOL RESULT] tool_call_id={msg.get('tool_call_id')}\n")
+
+                f.write("\n")
 
             f.write("--- FINAL SUMMARY ---\n")
             f.write(analysis_result.summary)

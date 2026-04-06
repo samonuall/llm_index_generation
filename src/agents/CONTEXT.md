@@ -9,7 +9,7 @@
   - `metadata` (dict): extra fields from the source dataset (may be empty)
 - **Queries**: Natural-language queries, each with one or more `relevant_doc_ids`.
 
-The specific split (task) is set at runtime via `--split`. Corpus structure varies by split — refer to the analysis agent's system prompt for split-specific details.
+The specific split (task) is set at runtime via `--split`. Corpus structure varies by split.
 
 ## Preprocessor Interface
 
