@@ -47,7 +47,7 @@ class HypothesisResult:
 
 
 class CodeAgent:
-    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue") -> None:
+    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue", log_dir: pathlib.Path | None = None) -> None:
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
         self._temperature = config.get("code_temperature", 0.7)
@@ -56,10 +56,29 @@ class CodeAgent:
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)
         self._max_hypotheses = config.get("max_hypotheses", 4)
         self._split = split
+        self._log_dir = log_dir
 
         # Load system prompt
         system_path = _AGENT_DIR / "context" / "CODE_SYSTEM.md"
         self._system_prompt = system_path.read_text(encoding="utf-8")
+
+    def _log_call(self, label: str, messages: list[dict], response_text: str) -> None:
+        """Write a verbose log of a code agent LLM call, matching analysis agent style."""
+        if self._log_dir is None:
+            return
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # Use a timestamp suffix to avoid collisions between calls
+        log_path = self._log_dir / f"code_{label}_{timestamp}.log"
+        with log_path.open("w", encoding="utf-8") as f:
+            f.write(f"=== Code Agent | {label} | {timestamp} ===\n\n")
+            for i, msg in enumerate(messages):
+                role = msg.get("role", "unknown").upper()
+                f.write(f"--- MESSAGE {i} [{role}] ---\n")
+                f.write(f"{msg.get('content', '')}\n\n")
+            f.write("--- RESPONSE ---\n")
+            f.write(response_text)
+        print(f"[code_agent] Log: {log_path}")
 
     def generate_hypotheses(
         self,
@@ -71,13 +90,6 @@ class CodeAgent:
         query_lookup: dict[str, str] | None = None,
     ) -> list[Hypothesis]:
         """Single LLM call to generate N hypotheses. Output JSON inside <hypotheses>...</hypotheses> tags."""
-
-        from .analysis_agent import load_corpus_description
-        dataset_info = (
-            (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
-            + "\n"
-            + load_corpus_description(self._split)
-        )
 
         # Build past attempts section with pattern diagnosis
         past_section = ""
@@ -148,8 +160,6 @@ class CodeAgent:
 {current_code}
 ```
 
-## Dataset Info
-{dataset_info}
 {past_section}
 {persistent_section}Generate exactly {n} hypotheses to improve the preprocessing code.
 Each hypothesis must be a complete, working preprocess.py implementation.
@@ -200,6 +210,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             if self._tracker:
                 self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
             text = response.choices[0].message.content or ""
+            self._log_call("generate_hypotheses", messages, text)
         except Exception as e:
             print(f"[code_agent] Hypothesis generation failed: {e}")
             return []
@@ -237,6 +248,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                     api_base=self._api_base,
                 )
                 text2 = response.choices[0].message.content or ""
+                self._log_call("generate_hypotheses_retry", messages, text2)
                 raw = self._parse_hypotheses_blocks(text2)
                 if raw is None:
                     raw = self._parse_hypotheses_json(text2)
@@ -519,6 +531,7 @@ The code MUST:
             if self._tracker:
                 self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
             text = response.choices[0].message.content or ""
+            self._log_call("generate_final_code", messages, text)
         except Exception as e:
             print(f"[code_agent] Final code generation failed: {e}")
             return None
