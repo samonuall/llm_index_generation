@@ -47,6 +47,23 @@ class HypothesisResult:
 
 
 class CodeAgent:
+    # Keyword lists for hypothesis taxonomy classification
+    _VOCAB_KW  = ["synonym", "alias", "abbreviat", "alternate name", "vocabular", "term expan", "keyword"]
+    _STRUCT_KW = ["chunk", "window", "overlap", "paragraph", "sentence", "section", "split", "merge"]
+    _CTX_KW    = ["title", "prepend", "breadcrumb", "context inject", "cross-section", "entity name", "header"]
+    _QB_KW     = ["tfidf", "tf-idf", "boost", "n-gram", "ngram", "reformat", "description-style", "query bridg"]
+    TAXONOMY_CATEGORIES = ["VOCABULARY", "STRUCTURE", "CONTEXT", "QUERY-BRIDGING"]
+
+    @staticmethod
+    def _classify(desc: str) -> str:
+        """Map a hypothesis description to a taxonomy category."""
+        d = desc.lower()
+        if any(k in d for k in CodeAgent._CTX_KW):    return "CONTEXT"
+        if any(k in d for k in CodeAgent._VOCAB_KW):  return "VOCABULARY"
+        if any(k in d for k in CodeAgent._QB_KW):     return "QUERY-BRIDGING"
+        if any(k in d for k in CodeAgent._STRUCT_KW): return "STRUCTURE"
+        return "VOCABULARY"  # default
+
     def __init__(self, config: dict, tracker=None) -> None:
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
@@ -136,6 +153,36 @@ class CodeAgent:
         else:
             persistent_section = ""
 
+        # Identify which taxonomy categories past hypotheses already covered
+        taxonomy_categories = self.TAXONOMY_CATEGORIES
+        tried_categories: list[str] = []
+        if past_hypotheses:
+            tried_categories = [CodeAgent._classify(ph["description"]) for ph in past_hypotheses]
+
+        # Assign categories to this round's hypotheses — prioritise unexplored ones
+        unexplored = [c for c in taxonomy_categories if c not in tried_categories]
+        explored   = [c for c in taxonomy_categories if c in tried_categories]
+        assigned_categories = (unexplored + explored)[:n]
+        while len(assigned_categories) < n:
+            assigned_categories.append(taxonomy_categories[len(assigned_categories) % len(taxonomy_categories)])
+
+        taxonomy_section = f"""
+## Hypothesis Diversity Requirement
+Each hypothesis MUST target a DIFFERENT strategic category. No two hypotheses may use the same approach.
+Assign each hypothesis exactly one category from the list below and label it clearly.
+
+**Categories:**
+- **VOCABULARY** — synonym expansion, entity aliases, abbreviation normalization, alternate names
+- **STRUCTURE** — chunking strategy, section merging, overlap windows, grouping adjacent sections
+- **CONTEXT** — title/entity name prepending, cross-section context injection, breadcrumb paths
+- **QUERY-BRIDGING** — description-style chunk reformatting, n-gram extraction, term frequency reweighting
+
+{"**Categories already tried in past rounds:** " + ", ".join(sorted(set(tried_categories))) if tried_categories else ""}
+**Required category assignments for this round:** {", ".join(f"H{i+1}→{c}" for i, c in enumerate(assigned_categories))}
+
+You MUST follow these assignments. Do not deviate.
+"""
+
         prompt = f"""## Analysis Summary
 {analysis_summary}
 
@@ -147,7 +194,8 @@ class CodeAgent:
 ## Dataset Info
 {dataset_info}
 {past_section}
-{persistent_section}Generate exactly {n} hypotheses to improve the preprocessing code.
+{persistent_section}{taxonomy_section}
+Generate exactly {n} hypotheses to improve the preprocessing code.
 Each hypothesis must be a complete, working preprocess.py implementation.
 
 IMPORTANT NOTES:
@@ -158,6 +206,7 @@ IMPORTANT NOTES:
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
 ### H1: <description>
+Category: {assigned_categories[0] if assigned_categories else "VOCABULARY"}
 Rationale: <rationale>
 Query IDs: <comma-separated query_ids>
 Falsifying: <condition>
@@ -165,7 +214,9 @@ Falsifying: <condition>
 <complete preprocess.py code>
 ```
 
-Repeat for H2, H3, H4.
+Repeat for H2 (Category: {assigned_categories[1] if len(assigned_categories) > 1 else "STRUCTURE"}), \
+H3 (Category: {assigned_categories[2] if len(assigned_categories) > 2 else "CONTEXT"}), \
+H4 (Category: {assigned_categories[3] if len(assigned_categories) > 3 else "QUERY-BRIDGING"}).
 
 The code MUST start with the standard imports:
 ```python

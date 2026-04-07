@@ -19,3 +19,14 @@ dependencies = [
     "tqdm>=4.67.3",
     "uvicorn>=0.41.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires live BM25 server",
+]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
