@@ -3,9 +3,9 @@
 ## Dataset
 
 - **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb)
-- **Corpus**: Text documents. Each `Document` has:
+- **Corpus**: Full-length text documents (e.g. complete Wikipedia articles). Each `Document` has:
   - `doc_id` (str): unique identifier
-  - `text` (str): document text
+  - `text` (str): full document text (may be several thousand words — chunking is expected)
   - `metadata` (dict): extra fields from the source dataset (may be empty)
 - **Queries**: Natural-language queries, each with one or more `relevant_doc_ids`.
 

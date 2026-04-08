@@ -1,5 +1,5 @@
 """
-get_data.py — Downloads FULL corpus + queries for CRUMB splits using STREAMING.
+get_data.py — Downloads corpus + queries for CRUMB splits using STREAMING.
 
 Usage:
     python -m src.evaluation.scripts.get_data --split paper_retrieval
@@ -7,6 +7,7 @@ Usage:
     python -m src.evaluation.scripts.get_data --split code_retrieval --limit 5000
 
 Caches to: data/<split>/documents.jsonl and data/<split>/queries.jsonl
+Re-running with --limit overwrites existing cached data for that split.
 """
 
 import argparse
@@ -27,33 +28,18 @@ SPLIT_MAP = {
     "set_operation_entity_retrieval": "set_operation_entity_retrieval",
 }
 
-# Expected corpus sizes from the paper
-EXPECTED_SIZES = {
-    "tip_of_the_tongue": 1_083_337,
-    "stack_exchange": 40_956,
-    "paper_retrieval": 363_133,
-    "set_operation_entity_retrieval": 651_704,
-    "clinical_trial": 914_628,
-    "legal_qa": 1_182_626,
-    "theorem_retrieval": 23_839,
-    "code_retrieval": 232_444,
-}
 
-
-def get_cache_dir(split: str, n_docs: Optional[int] = None) -> Path:
-    """Get cache directory, with optional suffix for limited datasets."""
-    base_dir = Path(__file__).parents[2] / "data"
-    if n_docs:
-        cache_dir = base_dir / f"{split}_{n_docs}docs"
-    else:
-        cache_dir = base_dir / split
+def get_cache_dir(split: str) -> Path:
+    """Get cache directory for a split: data/<split>/"""
+    base_dir = Path(__file__).parents[3] / "data"
+    cache_dir = base_dir / split
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
-def load_queries(split: str, n_queries: int = None, n_docs: Optional[int] = None) -> List[Dict]:
+def load_queries(split: str, n_queries: int = None) -> List[Dict]:
     crumb_name = SPLIT_MAP[split]
-    cache_dir = get_cache_dir(split, n_docs)
+    cache_dir = get_cache_dir(split)
     cache_file = cache_dir / "queries.jsonl"
 
     if cache_file.exists():
@@ -68,7 +54,7 @@ def load_queries(split: str, n_queries: int = None, n_docs: Optional[int] = None
 
     queries = []
     for item in dataset:
-        qrels = item.get("passage_qrels") or item.get("full_document_qrels") or []
+        qrels = item.get("full_document_qrels") or item.get("passage_qrels") or []
         relevant_ids = [q["id"] for q in qrels if q.get("label", 0) > 0]
         if relevant_ids:
             queries.append({
@@ -91,14 +77,13 @@ def load_queries(split: str, n_queries: int = None, n_docs: Optional[int] = None
 def load_full_corpus_streaming(split: str, max_docs: Optional[int] = None) -> List[Dict]:
     """
     Download corpus using STREAMING to avoid downloading all splits.
-    Much faster and more reliable.
-    
+
     Args:
         split: CRUMB split name
         max_docs: Maximum number of documents to download (None = all)
     """
     crumb_name = SPLIT_MAP[split]
-    cache_dir = get_cache_dir(split, max_docs)
+    cache_dir = get_cache_dir(split)
     cache_file = cache_dir / "documents.jsonl"
 
     if cache_file.exists():
@@ -108,31 +93,25 @@ def load_full_corpus_streaming(split: str, max_docs: Optional[int] = None) -> Li
         print(f"  Loaded {len(docs)} documents")
         return docs
 
-    expected_size = EXPECTED_SIZES.get(split, None)
     if max_docs:
         print(f"Downloading corpus for {split} (streaming mode, limit={max_docs:,})...")
     else:
         print(f"Downloading corpus for {split} (streaming mode)...")
-        if expected_size:
-            print(f"  Expected size: ~{expected_size:,} documents")
 
     # Use streaming=True to only fetch this split
     corpus_dataset = load_dataset(
         "jfkback/crumb",
-        "passage_corpus",
+        "full_document_corpus",
         split=crumb_name,
         streaming=True,
     )
 
     docs = []
     print("  Streaming documents...")
-    
-    # Determine progress bar total
-    total_to_download = max_docs if max_docs else expected_size
-    
+
     # Use tqdm for progress if available
     try:
-        pbar = tqdm(total=total_to_download, unit=" docs")
+        pbar = tqdm(total=max_docs, unit=" docs")
         for item in corpus_dataset:
             docs.append({
                 "doc_id": str(item["document_id"]),
@@ -140,13 +119,11 @@ def load_full_corpus_streaming(split: str, max_docs: Optional[int] = None) -> Li
                 "metadata": {},
             })
             pbar.update(1)
-            
-            # Stop if we've reached the limit
+
             if max_docs and len(docs) >= max_docs:
                 break
         pbar.close()
     except ImportError:
-        # No tqdm, just print progress
         for item in corpus_dataset:
             docs.append({
                 "doc_id": str(item["document_id"]),
@@ -155,16 +132,11 @@ def load_full_corpus_streaming(split: str, max_docs: Optional[int] = None) -> Li
             })
             if len(docs) % 10000 == 0:
                 print(f"    Downloaded {len(docs):,} documents...")
-            
-            # Stop if we've reached the limit
+
             if max_docs and len(docs) >= max_docs:
                 break
 
     print(f"\n  Total downloaded: {len(docs):,} documents")
-
-    # Warn if count doesn't match expected (only if not using limit)
-    if not max_docs and expected_size and abs(len(docs) - expected_size) > 100:
-        print(f"  ⚠️  Expected ~{expected_size:,} but got {len(docs):,}")
 
     print(f"Caching to {cache_file}")
     with cache_file.open("w") as f:
@@ -198,7 +170,7 @@ def main():
 
     args = parser.parse_args()
 
-    cache_dir = get_cache_dir(args.split, args.limit)
+    cache_dir = get_cache_dir(args.split)
     print(f"\n{'='*70}")
     print(f"CRUMB Data Download (Streaming) — Split: {args.split}")
     if args.limit:
@@ -206,7 +178,7 @@ def main():
     print(f"Cache directory: {cache_dir}")
     print(f"{'='*70}\n")
 
-    queries = load_queries(args.split, args.n_queries, args.limit)
+    queries = load_queries(args.split, args.n_queries)
     docs = load_full_corpus_streaming(args.split, args.limit)
 
     # Report stats

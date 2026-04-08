@@ -1,6 +1,6 @@
-analysis_model: "openai/claude-sonnet-4-5"
+analysis_model: "openai/gpt4o"
 analysis_temperature: 0.6
-code_model: "openai/claude-sonnet-4-5"
+code_model: "openai/gpt4o"
 code_temperature: 1.0
 api_base: "https://thekeymaker.umass.edu/"
 
@@ -8,7 +8,7 @@ server_port: 8765
 server_persist_dir: ".bm25_cache"
 
 max_hypotheses: 4
-max_distractors: 9000   # relevant docs + this many distractors = ~10K corpus
+max_distractors: 999999   # relevant docs + this many distractors = ~10K corpus
 recall_improvement_threshold: 0.00001
 analysis_max_turns: 8
 min_tool_turns: 3

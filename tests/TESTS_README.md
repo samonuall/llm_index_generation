@@ -58,7 +58,7 @@ Verifies the produced files are valid JSONL, contain required keys, and support 
 tests/data/test_data_transformation.py
 
 Tests the mapping/normalization logic inside the loader layer (in your case, get_data.py):
-qrels fallback order (passage_qrels → full_document_qrels → empty)
+qrels fallback order (full_document_qrels → passage_qrels → empty)
 filtering to label > 0
 output shape for queries (query_id, query_content, relevant_doc_ids)
 corpus row mapping (document_id → doc_id as string, document_content → text, metadata default)
@@ -66,7 +66,7 @@ Ensures you get consistent “canonical” records regardless of raw input shape
 tests/data/test_data_cache.py
 
 Tests the caching contract:
-correct cache directory naming (including the _<n_docs>docs suffix)
+correct cache directory naming (data/<split>/)
 reading cached JSONL when it exists (no dataset calls)
 writing cache files on cache miss
 cache separation by split and limit (no collisions)
