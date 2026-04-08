@@ -25,6 +25,7 @@ class Hypothesis:
     description: str
     rationale: str
     code: str
+    mechanism: str = ""
     query_ids_to_test: list[str] = field(default_factory=list)
     falsifying_condition: str = ""
 
@@ -85,8 +86,9 @@ class CodeAgent:
             )
             lines = []
             for ph in past_hypotheses:
+                mechanism_tag = f" [{ph['mechanism']}]" if ph.get("mechanism") else ""
                 lines.append(
-                    f"- **{ph['id']}: {ph['description']}** → "
+                    f"- **{ph['id']}: {ph['description']}**{mechanism_tag} → "
                     f"delta_recall@100={ph['delta_recall_100']:+.4f}, "
                     f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
                     f"proven={ph['proven']}. {ph.get('notes', '')}"
@@ -107,23 +109,33 @@ class CodeAgent:
             diagnosis = ""
             if all_failed and chunking_variations >= 3:
                 diagnosis = (
-                    "\n⚠ PATTERN DETECTED: All tested hypotheses were chunking/window variations and ALL failed. "
-                    "Chunking changes alone are not the solution. You MUST try fundamentally different strategies:\n"
-                    "  - Repeating the document title/entity name at the start of every chunk\n"
-                    "  - Extracting and indexing synonyms or alternative names from the document\n"
-                    "  - Using the first sentence of the document as a standalone high-weight chunk\n"
-                    "  - Do NOT generate more chunking window variations.\n"
+                    "\n⚠ PATTERN DETECTED: Multiple chunking/window variations have all failed. "
+                    "The retrieval problem is NOT about chunk boundaries — it is about vocabulary. "
+                    "Do NOT generate any more chunking or window strategies.\n"
                 )
             elif all_failed:
                 diagnosis = (
-                    "\n⚠ All previous hypotheses failed. Try a completely different approach — "
-                    "do not make incremental variations of what has already been tried.\n"
+                    "\n⚠ All previous hypotheses failed. Every new hypothesis must be "
+                    "mechanically different — not a renaming or minor tweak of what was tried.\n"
                 )
+
+            past_descriptions = [ph["description"] for ph in past_hypotheses]
+            diversity_instruction = (
+                "\n## Diversity Requirement\n"
+                "The approaches already tried are listed above. Each new hypothesis MUST be "
+                "mechanically different from all of them — different *operation* on the text, "
+                "not just a different parameter or a renaming.\n"
+                "Give each hypothesis a self-chosen label that describes its core mechanism "
+                "(e.g. 'TITLE-INJECTION', 'SYNONYM-EXPANSION', 'SENTENCE-LEAD', 'NGRAM-OVERLAY' "
+                "— invent your own if none fit). No two hypotheses in this round may share the same label.\n"
+                f"Already tried: {'; '.join(past_descriptions)}\n"
+            )
 
             past_section = (
                 "\n## Previously Tested Hypotheses (DO NOT repeat these)\n"
                 + "\n".join(lines)
                 + diagnosis
+                + diversity_instruction
             )
 
         if persistent_failure_ids:
@@ -158,6 +170,7 @@ IMPORTANT NOTES:
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
 ### H1: <description>
+Mechanism: <your own short label for the core operation, e.g. TITLE-INJECTION>
 Rationale: <rationale>
 Query IDs: <comma-separated query_ids>
 Falsifying: <condition>
@@ -165,7 +178,7 @@ Falsifying: <condition>
 <complete preprocess.py code>
 ```
 
-Repeat for H2, H3, H4.
+Repeat for H2, H3, H4. Each must have a DIFFERENT Mechanism label.
 
 The code MUST start with the standard imports:
 ```python
@@ -249,6 +262,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 Hypothesis(
                     id=h.get("id", f"H{len(hypotheses) + 1}"),
                     description=h.get("description", ""),
+                    mechanism=h.get("mechanism", ""),
                     rationale=h.get("rationale", ""),
                     code=h.get("code", ""),
                     query_ids_to_test=h.get("query_ids_to_test", []),
@@ -301,20 +315,23 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             if not code:
                 continue
 
-            # Extract rationale and query_ids from text between header and code
+            # Extract fields from text between header and code
             between = text[header_end:next_header_start]
+            mechanism_match = re.search(r"Mechanism:\s*(.+?)(?:\n|$)", between)
             rationale_match = re.search(r"Rationale:\s*(.+?)(?:\n|$)", between)
             qids_match = re.search(r"Query IDs?:\s*(.+?)(?:\n|$)", between)
             falsify_match = re.search(r"Falsif(?:ying|ication):\s*(.+?)(?:\n|$)", between)
 
             query_ids = []
             if qids_match:
-                # Parse comma-separated query IDs
                 query_ids = [q.strip().strip("[]\"'") for q in qids_match.group(1).split(",")]
+
+            mechanism = mechanism_match.group(1).strip() if mechanism_match else ""
 
             results.append({
                 "id": h_id,
                 "description": desc,
+                "mechanism": mechanism,
                 "rationale": rationale_match.group(1).strip() if rationale_match else "",
                 "code": code,
                 "query_ids_to_test": query_ids,

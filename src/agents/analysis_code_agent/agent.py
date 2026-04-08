@@ -551,6 +551,7 @@ class AnalysisCodeAgent(AgentRunner):
                 all_past_hypotheses.append({
                     "id": r.hypothesis.id,
                     "description": r.hypothesis.description,
+                    "mechanism": getattr(r.hypothesis, "mechanism", ""),
                     "delta_recall_100": r.delta_recall_100,
                     "delta_recall_10": r.delta_recall_10,
                     "delta_ndcg_10": r.delta_ndcg_10,
