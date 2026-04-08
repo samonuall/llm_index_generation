@@ -1,6 +1,6 @@
-analysis_model: "openai/gpt4o"
+analysis_model: "openai/claude-sonnet-4-5"
 analysis_temperature: 0.6
-code_model: "openai/gpt4o"
+code_model: "openai/claude-sonnet-4-5"
 code_temperature: 1.0
 api_base: "https://thekeymaker.umass.edu/"
 

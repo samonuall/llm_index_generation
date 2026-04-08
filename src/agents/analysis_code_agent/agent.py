@@ -648,21 +648,28 @@ class AnalysisCodeAgent(AgentRunner):
                     print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
                     final_code = best_hyp.hypothesis.code
 
-                # Write candidate code and run authoritative harness eval
                 self._log_final_code(i, final_code)
-                self._write_preprocess(final_code)
-                print("[agent] Running authoritative harness eval on candidate code ...")
-                try:
-                    candidate_results = self.run_eval(iteration=i * 2 + 1)
-                    candidate_recall_100 = candidate_results["metrics"]["recall_at_100"]
-                    print(f"[agent] Candidate recall@100={candidate_recall_100:.4f} "
-                          f"(global best so far: {best_recall_100:.4f})")
-                except Exception as e:
-                    print(f"[agent] Harness eval of candidate failed: {e} — reverting to pre-loop code.")
-                    self._write_preprocess(current_code)
-                    continue
 
-                # Write accepted hypothesis JSON with authoritative recall
+                if was_synthesized:
+                    # Synthesized code was never tested by test_hypothesis — run authoritative eval
+                    self._write_preprocess(final_code)
+                    print("[agent] Running authoritative harness eval on synthesized code ...")
+                    try:
+                        candidate_results = self.run_eval(iteration=i * 2 + 1)
+                        candidate_recall_100 = candidate_results["metrics"]["recall_at_100"]
+                        print(f"[agent] Synthesized recall@100={candidate_recall_100:.4f} "
+                              f"(global best so far: {best_recall_100:.4f})")
+                    except Exception as e:
+                        print(f"[agent] Harness eval of synthesized code failed: {e} — reverting to pre-loop code.")
+                        self._write_preprocess(current_code)
+                        continue
+                else:
+                    # Single hypothesis — already tested by test_hypothesis, use its recall
+                    candidate_recall_100 = best_hyp.hypothesis_recall_100
+                    print(f"[agent] Using test_hypothesis recall@100={candidate_recall_100:.4f} "
+                          f"(global best so far: {best_recall_100:.4f})")
+
+                # Write accepted hypothesis JSON
                 accepted_data = {
                     "iteration": i,
                     "adopted_hypothesis": {
@@ -688,10 +695,10 @@ class AnalysisCodeAgent(AgentRunner):
                 if candidate_recall_100 > best_recall_100:
                     best_recall_100 = candidate_recall_100
                     best_code = final_code
+                    self._write_preprocess(final_code)
                     print(f"[agent] Global best updated → recall@100={best_recall_100:.4f}")
                 else:
-                    print(f"[agent] Candidate did not beat global best — reverting preprocess.py.")
-                    self._write_preprocess(current_code)
+                    print(f"[agent] Candidate did not beat global best — preprocess.py unchanged.")
             else:
                 # No hypothesis improved — write accepted JSON indicating no adoption
                 accepted_data = {

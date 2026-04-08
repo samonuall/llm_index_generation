@@ -188,20 +188,24 @@ class AnalysisAgent:
         try:
             return _do_call(messages)
         except Exception as e:
-            print(f"[analysis_agent] LLM call failed (turn {turn}): {e}")
+            import traceback
+            print(f"[analysis_agent] LLM call failed (turn {turn}): {type(e).__name__}: {e}")
+            traceback.print_exc()
             if "ContentPolicyViolation" in type(e).__name__ or "content_policy" in str(e).lower() or "content management policy" in str(e).lower():
                 sanitized = self._sanitize_messages(messages)
                 messages[:] = sanitized
                 try:
                     return _do_call(sanitized)
                 except Exception as e2:
-                    print(f"[analysis_agent] LLM retry (sanitized) failed: {e2}")
+                    print(f"[analysis_agent] LLM retry (sanitized) failed: {type(e2).__name__}: {e2}")
+                    traceback.print_exc()
                     return None
             time.sleep(5)
             try:
                 return _do_call(messages)
             except Exception as e2:
-                print(f"[analysis_agent] LLM retry failed: {e2}")
+                print(f"[analysis_agent] LLM retry failed: {type(e2).__name__}: {e2}")
+                traceback.print_exc()
                 return None
 
     def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
@@ -217,39 +221,74 @@ class AnalysisAgent:
                 sanitized.append(m)
         return sanitized
 
+    def _strip_tool_messages(self, messages: list[dict]) -> list[dict]:
+        """Remove tool_calls from assistant messages and tool-role messages.
+
+        This lets us send the conversation to providers (e.g. Bedrock) that
+        reject tool_calls/tool messages when no ``tools`` param is given.
+        """
+        cleaned = []
+        for m in messages:
+            if m.get("role") == "tool":
+                # Convert tool result to a user message so context is preserved
+                cleaned.append({
+                    "role": "user",
+                    "content": f"[Tool result for {m.get('tool_call_id', '?')}]: {m.get('content', '')}",
+                })
+            elif m.get("role") == "assistant" and m.get("tool_calls"):
+                # Keep assistant text but drop tool_calls
+                content = m.get("content") or ""
+                tool_summaries = []
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    tool_summaries.append(f"[Called {fn.get('name', '?')}]")
+                combined = (content + "\n" + "\n".join(tool_summaries)).strip()
+                cleaned.append({"role": "assistant", "content": combined})
+            else:
+                cleaned.append(m)
+        return cleaned
+
     def _request_summary(self, messages: list[dict]) -> str:
         """Ask the LLM for a final summary when none was produced in the loop."""
-        messages.append({
+        # Strip tool-related messages so providers that don't support tools= work
+        summary_messages = self._strip_tool_messages(messages)
+        summary_messages.append({
             "role": "user",
             "content": (
-                "Now provide your FINAL analysis summary. No more tool calls. "
+                "IMPORTANT: All tools have been disabled. You CANNOT make any more tool calls.\n\n"
+                "Based on everything you have investigated so far, provide your FINAL analysis summary NOW.\n"
                 "Provide a structured summary of failure patterns and recommendations "
-                "with concrete evidence (query IDs/doc IDs). "
-                "Wrap your analysis in <summary>...</summary> tags."
+                "with concrete evidence (query IDs/doc IDs) from your earlier investigation.\n\n"
+                "You MUST wrap your entire analysis in <summary>...</summary> tags. "
+                "Do NOT attempt to call any tools — just write the summary."
             ),
         })
         try:
             response = completion(
                 model=self._model,
-                messages=messages,
+                messages=summary_messages,
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
-                # No tools parameter — prevent tool calls
             )
             msg = response.choices[0].message
             text = msg.content or ""
 
-            # Guardrail: if LLM somehow still makes tool calls, retry with stricter instruction
-            if msg.tool_calls:
-                messages.append({"role": "assistant", "content": text})
-                messages.append({
+            # Guardrail: if LLM produced tool calls or no <summary> tags, retry once
+            needs_retry = msg.tool_calls or "<summary>" not in text
+            if needs_retry:
+                summary_messages.append({"role": "assistant", "content": text})
+                summary_messages.append({
                     "role": "user",
-                    "content": "Do not use any tools. Output only the final written summary in <summary>...</summary> tags.",
+                    "content": (
+                        "You did NOT produce a summary. Tools are disabled — do not attempt tool calls.\n"
+                        "Write your final analysis summary NOW based on what you already investigated. "
+                        "Wrap it in <summary>...</summary> tags."
+                    ),
                 })
                 response2 = completion(
                     model=self._model,
-                    messages=messages,
+                    messages=summary_messages,
                     temperature=self._temperature,
                     api_key=self._api_key,
                     api_base=self._api_base,
@@ -263,9 +302,11 @@ class AnalysisAgent:
             if not summary:
                 summary = "No summary generated."
 
-            messages.append({"role": "assistant", "content": text})
             return summary
-        except Exception:
+        except Exception as e:
+            import traceback
+            print(f"[analysis_agent] _request_summary failed: {type(e).__name__}: {e}")
+            traceback.print_exc()
             return "Analysis failed to produce summary."
 
     def _build_candidates(self, eval_results: dict, baseline_results: dict) -> dict:
