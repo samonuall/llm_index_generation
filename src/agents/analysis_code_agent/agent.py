@@ -37,10 +37,13 @@ from .run_journal import RunJournal
 from .run_tracker import RunTracker
 
 
-def _load_config() -> dict:
+def _load_config(overrides: dict | None = None) -> dict:
     config_path = _AGENT_DIR / "config.yaml"
     with config_path.open(encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    if overrides:
+        config.update({k: v for k, v in overrides.items() if v is not None})
+    return config
 
 
 def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, seed: int = 42):
@@ -107,8 +110,17 @@ def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, se
 class AnalysisCodeAgent(AgentRunner):
     agent_name = "analysis_code_agent"
 
-    def __init__(self, use_history: bool = True, use_contrastive: bool = True) -> None:
-        self._config = _load_config()
+    def __init__(self, use_history: bool = True, use_contrastive: bool = True, model: str | None = None, api_base: str | None = None) -> None:
+        overrides: dict = {}
+        if model:
+            overrides["analysis_model"] = model
+            overrides["code_model"] = model
+            # If model overridden but no explicit api_base, clear it so LiteLLM
+            # routes to the provider's native endpoint (e.g. Google for gemini/).
+            overrides["api_base"] = api_base  # None = native endpoint
+        elif api_base is not None:
+            overrides["api_base"] = api_base
+        self._config = _load_config(overrides or None)
         self._use_history = use_history
         self._use_contrastive = use_contrastive
         self._server_process = None
@@ -250,6 +262,45 @@ class AnalysisCodeAgent(AgentRunner):
 
     # --- Preprocessing helper ---
 
+    def _compute_baseline(self) -> dict:
+        """Run baseline preprocessor on the current sampled corpus via BM25 server.
+
+        Overrides AgentRunner._compute_baseline() so that baseline results are
+        computed on the exact same document set as the current eval (R1.B).
+        """
+        from .eval_utils import run_subset_eval
+
+        _EVAL_DIR = _PROJECT_ROOT / "src" / "evaluation"
+        _AGENTS_DIR = _PROJECT_ROOT / "src" / "agents"
+        for p in [str(_EVAL_DIR), str(_AGENTS_DIR)]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+        from baseline.preprocess import Preprocessor as BaselinePreprocessor
+
+        if self._documents is None or self._queries is None:
+            raise RuntimeError("_compute_baseline() called before documents/queries were loaded.")
+
+        baseline_preprocessor = BaselinePreprocessor()
+        baseline_chunks = baseline_preprocessor.preprocess(self._documents)
+        print(f"[agent] Baseline: {len(baseline_chunks)} chunks from {len(self._documents)} docs")
+        self._client.build_index("baseline", baseline_chunks, persist=False)
+
+        baseline_summary = run_subset_eval("baseline", self._queries, self._client, top_k=100)
+        return {
+            "recall_at_k": baseline_summary.recall_at_100,
+            "ndcg": baseline_summary.ndcg_at_10,
+            "query_results": [
+                {
+                    "query_id": pq.query_id,
+                    "hit": pq.hit_at_100,
+                    "rank": pq.rank,
+                    "retrieved_doc_ids": pq.retrieved_doc_ids,
+                }
+                for pq in baseline_summary.per_query
+            ],
+        }
+
     def _preprocess_with_current_code(self, documents: list, current_code: str) -> list:
         """Load preprocessor from current code and run it on documents."""
         from .eval_utils import load_preprocessor_from_code
@@ -268,21 +319,22 @@ class AnalysisCodeAgent(AgentRunner):
         with log_path.open("w", encoding="utf-8") as f:
             f.write(f"=== Analysis Agent | Iteration {iteration} | {timestamp} ===\n\n")
 
-            # Context summary
-            n_turns = 0
-            for msg in analysis_result.conversation:
-                if msg["role"] == "system":
-                    continue
-                elif msg["role"] == "user" and n_turns == 0:
-                    f.write("--- CONTEXT SUMMARY ---\n")
-                    f.write(msg["content"][:500] + "\n...\n\n")
-                    n_turns += 1
-                elif msg["role"] == "assistant":
-                    f.write(f"--- TURN {n_turns} ---\n")
-                    f.write(f"[ASSISTANT]: {msg['content']}\n\n")
-                    n_turns += 1
-                elif msg["role"] == "user":
-                    f.write(f"{msg['content']}\n\n")
+            for i, msg in enumerate(analysis_result.conversation):
+                role = msg.get("role", "unknown").upper()
+                f.write(f"--- MESSAGE {i} [{role}] ---\n")
+
+                if msg.get("content"):
+                    f.write(f"{msg['content']}\n")
+
+                if msg.get("tool_calls"):
+                    for tc in msg["tool_calls"]:
+                        fn = tc.get("function", {})
+                        f.write(f"[TOOL CALL] id={tc.get('id')} name={fn.get('name')} args={fn.get('arguments')}\n")
+
+                if role == "TOOL":
+                    f.write(f"[TOOL RESULT] tool_call_id={msg.get('tool_call_id')}\n")
+
+                f.write("\n")
 
             f.write("--- FINAL SUMMARY ---\n")
             f.write(analysis_result.summary)
@@ -347,6 +399,12 @@ class AnalysisCodeAgent(AgentRunner):
             return "agent_contrastive_no_history"
         return "agent"
 
+    def _model_folder(self) -> str:
+        """Return a filesystem-safe folder name derived from the model string."""
+        model = self._config.get("code_model", "unknown")
+        # Strip provider prefix (e.g. "openai/gpt4o" → "gpt4o")
+        return model.split("/")[-1].replace(".", "-")
+
     def _write_results(
         self,
         tracker: RunTracker,
@@ -356,14 +414,15 @@ class AnalysisCodeAgent(AgentRunner):
         baseline_results: dict,
         final_results: dict | None,
     ) -> None:
-        results_dir = _PROJECT_ROOT / "results"
-        results_dir.mkdir(exist_ok=True)
+        results_dir = _PROJECT_ROOT / "results" / self._model_folder()
+        results_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = results_dir / f"{self.condition}_{timestamp}.json"
 
         metrics = final_results.get("metrics", {}) if final_results else {}
         payload = {
             "condition": self.condition,
+            "model": self._config.get("code_model"),
             "loops": n_loops,
             "split": getattr(self, "split", "tip_of_the_tongue"),
             "seed": 42,
@@ -393,24 +452,24 @@ class AnalysisCodeAgent(AgentRunner):
     def run(self, n_loops: int) -> None:
         """Override AgentRunner.run() with analysis+hypothesis loop."""
 
-        # Load baseline results
-        baseline_path = pathlib.Path(__file__).parent.parent / "baseline_results.json"
-        print(f"\n{'#'*60}")
-        print(f"# Baseline (raw documents, no preprocessing) — from baseline_results.json")
-        print(f"{'#'*60}")
-        baseline_results = json.loads(baseline_path.read_text(encoding="utf-8"))
-        print(f"  Recall@100 : {baseline_results['recall_at_k']:.4f}")
-        print(f"  nDCG@10    : {baseline_results['ndcg']:.4f}")
-
         # Load data
         max_distractors = self._config.get("max_distractors", 9000)
-        documents, queries = _load_data(self.split, max_distractors=max_distractors)
+        seed = self._config.get("seed", 42)
+        documents, queries = _load_data(self.split, max_distractors=max_distractors, seed=seed)
         self._documents = documents
         self._queries = queries
         print(f"[agent] Loaded {len(documents)} documents, {len(queries)} queries.")
 
-        # Start BM25 server
+        # Start BM25 server (must be up before baseline eval)
         self._ensure_server_running()
+
+        # Compute baseline by running baseline preprocessor on the current corpus
+        print(f"\n{'#'*60}")
+        print(f"# Baseline (raw documents, no preprocessing) — computed on current corpus")
+        print(f"{'#'*60}")
+        baseline_results = self._compute_baseline()
+        print(f"  Recall@100 : {baseline_results['recall_at_k']:.4f}")
+        print(f"  nDCG@10    : {baseline_results['ndcg']:.4f}")
 
         # Create per-experiment log directory
         model_name = self._config.get("code_model", "unknown_model").replace("/", "_")
@@ -421,8 +480,8 @@ class AnalysisCodeAgent(AgentRunner):
 
         # Create tracker + sub-agents + journal
         tracker = RunTracker()
-        analysis_agent = AnalysisAgent(self._config, tracker=tracker)
-        code_agent = CodeAgent(self._config, tracker=tracker)
+        analysis_agent = AnalysisAgent(self._config, tracker=tracker, split=self.split)
+        code_agent = CodeAgent(self._config, tracker=tracker, split=self.split, log_dir=self._experiment_dir)
         max_hypotheses = self._config.get("max_hypotheses", 4)
         all_past_hypotheses: list[dict] = []  # track across loops
         journal = RunJournal(self._experiment_dir)
@@ -485,8 +544,6 @@ class AnalysisCodeAgent(AgentRunner):
                     eval_results=raw_results,
                     baseline_results=baseline_results,
                     current_code=current_code,
-                    documents=documents,
-                    queries=queries,
                     client=self._client,
                     split=self.split,
                     journal_summary=journal.summary_for_prompt() if self._use_history else None,
@@ -610,6 +667,27 @@ class AnalysisCodeAgent(AgentRunner):
                     print(f"[agent] Adopting {best_hyp.hypothesis.id} directly.")
                     final_code = best_hyp.hypothesis.code
 
+                self._log_final_code(i, final_code)
+
+                if was_synthesized:
+                    # Synthesized code was never tested by test_hypothesis — run authoritative eval
+                    self._write_preprocess(final_code)
+                    print("[agent] Running authoritative harness eval on synthesized code ...")
+                    try:
+                        candidate_results = self.run_eval(iteration=i * 2 + 1)
+                        candidate_recall_100 = candidate_results["metrics"]["recall_at_100"]
+                        print(f"[agent] Synthesized recall@100={candidate_recall_100:.4f} "
+                              f"(global best so far: {best_recall_100:.4f})")
+                    except Exception as e:
+                        print(f"[agent] Harness eval of synthesized code failed: {e} — reverting to pre-loop code.")
+                        self._write_preprocess(current_code)
+                        continue
+                else:
+                    # Single hypothesis — already tested by test_hypothesis, use its recall
+                    candidate_recall_100 = best_hyp.hypothesis_recall_100
+                    print(f"[agent] Using test_hypothesis recall@100={candidate_recall_100:.4f} "
+                          f"(global best so far: {best_recall_100:.4f})")
+
                 # Write accepted hypothesis JSON
                 accepted_data = {
                     "iteration": i,
@@ -627,18 +705,19 @@ class AnalysisCodeAgent(AgentRunner):
                         {"id": r.hypothesis.id, "description": r.hypothesis.description}
                         for r in proven_results
                     ],
+                    "candidate_recall_100": candidate_recall_100,
+                    "global_best_recall_100_before": best_recall_100,
                 }
                 accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
                 accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
 
-                self._log_final_code(i, final_code)
-                self._write_preprocess(final_code)
-
-                new_recall_estimate = loop_start_recall_100 + best_hyp.delta_recall_100
-                if new_recall_estimate > best_recall_100:
-                    best_recall_100 = new_recall_estimate
+                if candidate_recall_100 > best_recall_100:
+                    best_recall_100 = candidate_recall_100
                     best_code = final_code
-                    print(f"[agent] Global best updated → estimated recall@100≈{best_recall_100:.4f}")
+                    self._write_preprocess(final_code)
+                    print(f"[agent] Global best updated → recall@100={best_recall_100:.4f}")
+                else:
+                    print(f"[agent] Candidate did not beat global best — preprocess.py unchanged.")
             else:
                 # No hypothesis improved — write accepted JSON indicating no adoption
                 accepted_data = {
@@ -649,13 +728,6 @@ class AnalysisCodeAgent(AgentRunner):
                 accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
                 accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
                 print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
-
-        # Restore globally best code before final eval
-        # (guards against a later loop degrading what an earlier loop achieved)
-        current_final_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
-        if best_code != current_final_code:
-            print(f"\n[agent] Restoring globally best code (estimated recall@100≈{best_recall_100:.4f})")
-            self._write_preprocess(best_code)
 
         # Final eval
         print(f"\n{'#'*60}")

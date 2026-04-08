@@ -16,22 +16,32 @@ import datetime
 
 import yaml
 from dotenv import load_dotenv
-from litellm import completion
+from .llm_call import completion
 
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
 
 
-def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None) -> None:
+def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api_base: str | None = None) -> None:
     """Run the one-shot baseline: one LLM call → eval → save results."""
 
     config_path = _AGENT_DIR / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     model = model or config.get("code_model", "openai/gpt4o")
-    api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
-    api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
+    # Only pass api_key explicitly when using the proxy (api_base set).
+    # For native provider endpoints (e.g. Gemini), let LiteLLM read the key from env.
+    proxy_api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+    # If api_base explicitly provided, use it. If model was overridden but no api_base given,
+    # use None so LiteLLM routes to the provider's native endpoint (e.g. Google for gemini/).
+    # Only fall back to config api_base when using the default model (no override).
+    if api_base is not None:
+        pass  # use as-is
+    elif model != config.get("code_model"):
+        api_base = None  # model was overridden — use native endpoint
+    else:
+        api_base = config.get("api_base")
     temperature = config.get("code_temperature", 1.0)
     max_distractors = config.get("max_distractors", 9000)
 
@@ -85,8 +95,13 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None) -> 
         miss_ids = []
 
     # --- Build prompt ---
+    from .analysis_agent import load_corpus_description
     system_prompt = (_AGENT_DIR / "context" / "CODE_SYSTEM.md").read_text(encoding="utf-8")
-    context_info = (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+    context_info = (
+        (_AGENT_DIR.parent / "CONTEXT.md").read_text(encoding="utf-8")
+        + "\n"
+        + load_corpus_description(split)
+    )
     current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
 
     miss_section = ""
@@ -99,7 +114,7 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None) -> 
         )
 
     prompt = f"""## Task
-You are given a BM25 retrieval system over a pre-chunked Wikipedia corpus.
+You are given a BM25 retrieval system over a document corpus.
 The current preprocessing achieves:
   - Recall@100: {baseline_recall:.4f}
   - nDCG@10:    {baseline_ndcg:.4f}
@@ -133,7 +148,7 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
             model=model,
             messages=messages,
             temperature=temperature,
-            api_key=api_key,
+            api_key=proxy_api_key if api_base else None,
             api_base=api_base,
         )
         tracker.record_llm_call(response, time.time() - t0, agent="one_shot")
@@ -181,8 +196,9 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
     server_proc.terminate()
 
     # --- Save results ---
-    results_dir = _PROJECT_ROOT / "results"
-    results_dir.mkdir(exist_ok=True)
+    model_folder = model.split("/")[-1].replace(".", "-")
+    results_dir = _PROJECT_ROOT / "results" / model_folder
+    results_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = results_dir / f"one_shot_{timestamp}.json"
     payload = {

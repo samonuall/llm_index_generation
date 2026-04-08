@@ -182,3 +182,29 @@ Agents never call or import from `get_data.py`.
 - The harness validates that `Preprocessor` is named exactly `Preprocessor` and inherits from
   `BasePreprocessor`. Agents that fail this check will not be evaluated.
 - Requires a `.env` file at the project root with provider API keys (e.g. `GOOGLE_API_KEY`).
+
+## Running Tests
+
+Tests use pytest with small synthetic fixtures (no real corpus needed for fast tests).
+
+```bash
+# All fast tests (< 2 seconds)
+uv run pytest -v
+
+# Skip slow tests (BM25 index builds, real data)
+uv run pytest -m "not slow and not integration" -v
+
+# Single test file
+uv run pytest tests/test_data_layer.py -v
+
+# Single test class or function
+uv run pytest tests/test_bm25_retrieval.py::TestChunkSearch -v
+```
+
+Test structure:
+- `tests/conftest.py` — Shared fixtures (synthetic docs, queries, chunks, BM25 index)
+- `tests/fixtures/` — Static JSONL test data (8 docs, 5 queries with known answers)
+- `tests/test_data_layer.py` — Schema, JSONL I/O, chunk contracts
+- `tests/test_bm25_retrieval.py` — BM25 index, search, aggregation, eval metrics
+- `tests/test_analysis_agent.py` — Analysis/code agent pipeline, journal, hypotheses
+- `tests/test_coding_agent.py` — Agent runner, LiteLLM/Gemini agents, prompt utils

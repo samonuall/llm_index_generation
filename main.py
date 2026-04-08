@@ -52,8 +52,8 @@ def main() -> None:
     parser.add_argument(
         "--split",
         type=str,
-        default="tip_of_the_tongue_5000docs",
-        help="CRUMB split name (default: tip_of_the_tongue_5000docs)",
+        default="tip_of_the_tongue",
+        help="CRUMB split name (default: tip_of_the_tongue)",
     )
     parser.add_argument(
         "--no-query-text",
@@ -71,6 +71,19 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Enable MLflow tracing of LLM calls (only applies to lite_llm_agent)",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Override LLM model for analysis_code_agent and one_shot (e.g. gemini/gemini-2.5-pro)",
+    )
+    parser.add_argument(
+        "--api-base",
+        type=str,
+        default=None,
+        dest="api_base",
+        help="Override API base URL (omit to use provider default, e.g. for native Gemini API)",
     )
     args = parser.parse_args()
 
@@ -93,10 +106,10 @@ def main() -> None:
         from src.agents.analysis_code_agent import AnalysisCodeAgent
         use_history = args.condition in ("agent_history", "agent_contrastive")
         use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
-        agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive)
+        agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive, model=args.model, api_base=args.api_base)
     elif args.agent == "one_shot":
         from src.agents.analysis_code_agent.one_shot_agent import run_one_shot
-        run_one_shot(split=args.split)
+        run_one_shot(split=args.split, model=args.model, api_base=args.api_base)
         return
 
     elif args.agent == "baseline":

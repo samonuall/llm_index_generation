@@ -13,14 +13,12 @@ import importlib.util
 import pathlib
 from abc import ABC, abstractmethod
 
-_BASELINE_RESULTS_PATH = pathlib.Path(__file__).parent / "baseline_results.json"
-
 _PROJECT_ROOT = pathlib.Path(__file__).parents[2]
 
 
 class AgentRunner(ABC):
     agent_name: str
-    split: str = "tip_of_the_tongue"  # ADD THIS LINE - default split
+    split: str = "tip_of_the_tongue"
     baseline_results: dict | None = None
     _system_instruction: str = ""
 
@@ -30,11 +28,11 @@ class AgentRunner(ABC):
             _PROJECT_ROOT / "src" / "agents" / self.agent_name / "preprocess.py"
         )
 
-        # Baseline results loaded from src/agents/baseline_results.json
+        # Compute baseline by running baseline preprocessor on current corpus
         print(f"\n{'#'*60}")
-        print(f"# Baseline (raw documents, no preprocessing) — from baseline_results.json")
+        print(f"# Baseline (raw documents, no preprocessing) — computed dynamically")
         print(f"{'#'*60}")
-        self.baseline_results = json.loads(_BASELINE_RESULTS_PATH.read_text(encoding="utf-8"))
+        self.baseline_results = self._compute_baseline()
         print(f"  Recall@100 : {self.baseline_results['recall_at_k']:.4f}")
         print(f"  nDCG@10    : {self.baseline_results['ndcg']:.4f}")
         self.on_baseline_complete(self.baseline_results)
@@ -128,6 +126,31 @@ class AgentRunner(ABC):
             iteration=iteration,      # NEW: pass iteration for file naming
             track_iterations=True     # NEW: enable iteration summary
         )
+
+    def _compute_baseline(self) -> dict:
+        """Run baseline preprocessor on current data and return results dict.
+
+        Subclasses (e.g. AnalysisCodeAgent) override this to use the BM25
+        server instead of the static harness.
+        """
+        eval_scripts_dir = _PROJECT_ROOT / "src" / "evaluation" / "scripts"
+        eval_dir = _PROJECT_ROOT / "src" / "evaluation"
+        agents_dir = _PROJECT_ROOT / "src" / "agents"
+
+        for p in [str(eval_scripts_dir), str(eval_dir), str(agents_dir)]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+        from test_preprocessing_split import evaluate
+        from baseline.preprocess import Preprocessor as BaselinePreprocessor
+
+        baseline = BaselinePreprocessor()
+        results = evaluate(baseline, split=self.split, top_k=100)
+        return {
+            "recall_at_k": results["metrics"]["recall_at_100"],
+            "ndcg": results["metrics"]["ndcg_at_10"],
+            "query_results": results.get("query_results", []),
+        }
 
     def on_baseline_complete(self, baseline_results: dict) -> None:
         """Called after baseline eval; override to inject baseline numbers into system instruction."""
