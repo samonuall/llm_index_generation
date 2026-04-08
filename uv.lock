@@ -1470,12 +1470,6 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -1493,14 +1487,11 @@ requires-dist = [
     { name = "mlflow", specifier = ">=2.0.0" },
     { name = "nltk", specifier = ">=3.9.2" },
     { name = "pystemmer", specifier = ">=3.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -825,8 +825,9 @@ class TestRequestSummary:
         messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "ctx"}]
         agent._request_summary(messages)
 
-        # A user message requesting summary should have been appended
-        user_msgs = [m for m in messages if m["role"] == "user"]
+        # A user message requesting summary should have been sent to the LLM
+        sent_messages = mock_comp.call_args.kwargs["messages"]
+        user_msgs = [m for m in sent_messages if m["role"] == "user"]
         assert any("summary" in m["content"].lower() for m in user_msgs)
 
     @patch("src.agents.analysis_code_agent.analysis_agent.completion")
@@ -842,9 +843,10 @@ class TestRequestSummary:
         result = agent._request_summary(messages)
 
         assert mock_comp.call_count == 2
-        # Should have appended a stricter instruction
-        user_msgs = [m for m in messages if m["role"] == "user"]
-        assert any("do not use any tools" in m["content"].lower() for m in user_msgs)
+        # Should have appended a stricter instruction in the second call
+        sent_messages = mock_comp.call_args.kwargs["messages"]
+        user_msgs = [m for m in sent_messages if m["role"] == "user"]
+        assert any("do not attempt tool calls" in m["content"].lower() for m in user_msgs)
 
     @patch("src.agents.analysis_code_agent.analysis_agent.completion")
     def test_fallback_on_exception(self, mock_comp):
@@ -870,9 +872,10 @@ class TestRequestSummary:
         mock_comp.return_value = make_llm_response(content="<summary>Result</summary>")
 
         messages = [{"role": "system", "content": "sys"}]
-        original_len = len(messages)
         agent._request_summary(messages)
-        assert len(messages) > original_len
+        # The method works on a copy; verify it actually called the LLM with more messages than given
+        sent_messages = mock_comp.call_args.kwargs["messages"]
+        assert len(sent_messages) > len(messages)
 
 
 # ---------------------------------------------------------------------------
