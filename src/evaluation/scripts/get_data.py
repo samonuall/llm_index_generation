@@ -42,7 +42,7 @@ EXPECTED_SIZES = {
 
 def get_cache_dir(split: str, n_docs: Optional[int] = None) -> Path:
     """Get cache directory, with optional suffix for limited datasets."""
-    base_dir = Path(__file__).parents[3] / "data"
+    base_dir = Path(__file__).parents[2] / "data"
     if n_docs:
         cache_dir = base_dir / f"{split}_{n_docs}docs"
     else:
