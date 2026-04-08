@@ -40,10 +40,18 @@ def _truncate(text: str, max_len: int = 40) -> str:
     return text[:max_len - 3] + "..."
 
 
+_DELTA_KEY_MAP = {
+    "recall_at_100": "delta_recall_100",
+    "ndcg_at_10": "delta_ndcg_10",
+    "recall_at_10": "delta_recall_10",
+}
+
+
 def _make_plot(
     experiment_dir: pathlib.Path,
     iterations: list[dict],
     accepted_data: dict[int, Optional[dict]],
+    hypotheses: list[dict],
     metric_key: str,
     metric_label: str,
     filename: str,
@@ -66,6 +74,19 @@ def _make_plot(
     fig, ax = plt.subplots(figsize=(12, 7), facecolor=BG_COLOR)
     ax.set_facecolor(PANEL_COLOR)
 
+    # Build (iteration, h_id) -> delta map so we can shift each point to its
+    # post-adoption score.  The iteration record stores the score *before*
+    # hypotheses are tested; when a hypothesis is adopted we add its delta so
+    # the point reflects what was actually achieved.
+    delta_key = _DELTA_KEY_MAP.get(metric_key)
+    hyp_delta: dict[tuple[int, str], float] = {}
+    if delta_key:
+        for h in hypotheses:
+            h_it = h.get("iteration")
+            h_id = h.get("h_id")
+            if h_it is not None and h_id is not None:
+                hyp_delta[(h_it, h_id)] = h.get(delta_key, 0.0)
+
     x_vals = []
     y_vals = []
     adopted_iters = []
@@ -76,10 +97,15 @@ def _make_plot(
         val = entry.get(metric_key)
         if it is None or val is None:
             continue
+
+        adopted_id = entry.get("adopted_hypothesis_id")
+        # Adjust score to post-adoption value when a hypothesis was adopted.
+        if adopted_id and delta_key:
+            val = val + hyp_delta.get((it, adopted_id), 0.0)
+
         x_vals.append(it)
         y_vals.append(val)
 
-        adopted_id = entry.get("adopted_hypothesis_id")
         acc = accepted_data.get(it)
         if adopted_id and acc and acc.get("adopted_hypothesis"):
             adopted_iters.append(it)
@@ -273,6 +299,8 @@ def plot_experiment(experiment_dir: pathlib.Path) -> list[pathlib.Path]:
         print("[plot_experiment] No iterations found in run_journal.json")
         return saved
 
+    hypotheses = journal.get("hypotheses", [])
+
     # Load accepted data for each iteration
     iter_nums = [entry["iteration"] for entry in iterations if "iteration" in entry]
     accepted_data: dict[int, Optional[dict]] = {}
@@ -285,6 +313,7 @@ def plot_experiment(experiment_dir: pathlib.Path) -> list[pathlib.Path]:
             experiment_dir=experiment_dir,
             iterations=iterations,
             accepted_data=accepted_data,
+            hypotheses=hypotheses,
             metric_key="recall_at_100",
             metric_label="Recall@100",
             filename="recall_at_100.png",
@@ -300,6 +329,7 @@ def plot_experiment(experiment_dir: pathlib.Path) -> list[pathlib.Path]:
             experiment_dir=experiment_dir,
             iterations=iterations,
             accepted_data=accepted_data,
+            hypotheses=hypotheses,
             metric_key="ndcg_at_10",
             metric_label="nDCG@10",
             filename="ndcg_at_10.png",
