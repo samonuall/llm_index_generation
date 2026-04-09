@@ -105,9 +105,8 @@ class CodeAgent:
             )
             lines = []
             for ph in past_hypotheses:
-                mechanism_tag = f" [{ph['mechanism']}]" if ph.get("mechanism") else ""
                 lines.append(
-                    f"- **{ph['id']}: {ph['description']}**{mechanism_tag} → "
+                    f"- **{ph['id']}: {ph['description']}** → "
                     f"delta_recall@100={ph['delta_recall_100']:+.4f}, "
                     f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
                     f"proven={ph['proven']}. {ph.get('notes', '')}"
@@ -138,16 +137,10 @@ class CodeAgent:
                     "mechanically different — not a renaming or minor tweak of what was tried.\n"
                 )
 
-            past_descriptions = [ph["description"] for ph in past_hypotheses]
             diversity_instruction = (
                 "\n## Diversity Requirement\n"
-                "The approaches already tried are listed above. Each new hypothesis MUST be "
-                "mechanically different from all of them — different *operation* on the text, "
-                "not just a different parameter or a renaming.\n"
-                "Give each hypothesis a self-chosen label that describes its core mechanism "
-                "(e.g. 'TITLE-INJECTION', 'SYNONYM-EXPANSION', 'SENTENCE-LEAD', 'NGRAM-OVERLAY' "
-                "— invent your own if none fit). No two hypotheses in this round may share the same label.\n"
-                f"Already tried: {'; '.join(past_descriptions)}\n"
+                "The approaches already tried are listed above. "
+                "Each new hypothesis must be different from all of them.\n"
             )
 
             past_section = (
@@ -187,7 +180,6 @@ IMPORTANT NOTES:
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
 ### H1: <description>
-Mechanism: <your own short label for the core operation, e.g. TITLE-INJECTION>
 Rationale: <rationale>
 Query IDs: <comma-separated query_ids>
 Falsifying: <condition>
@@ -195,7 +187,7 @@ Falsifying: <condition>
 <complete preprocess.py code>
 ```
 
-Repeat for H2, H3, H4. Each must have a DIFFERENT Mechanism label.
+Repeat for H2, H3, H4.
 
 The code MUST start with the standard imports:
 ```python
