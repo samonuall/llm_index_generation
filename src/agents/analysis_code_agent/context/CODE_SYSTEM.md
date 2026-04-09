@@ -25,23 +25,17 @@ The `preprocess(self, docs: List[Document]) -> List[Chunk]` method must:
 
 ## CRITICAL: Corpus Structure
 
-The corpus is **pre-chunked Wikipedia articles**. Each `Document` is a single Wikipedia section (~300-1000 words), NOT a full article. The `doc_id` format is `"{wikipedia_page_id}:{section_index}"`:
-
-- `"24073089:0"` → title/intro section (very short — usually just the article title and a one-liner)
-- `"24073089:1"` → second section (usually Plot or main content)
-- `"24073089:2"` → third section, etc.
-
-All sections sharing the same prefix (e.g. `"24073089"`) belong to the **same Wikipedia article**. You can group them with `doc_id.split(":")[0]`.
+The corpus contains **full Wikipedia articles**. Each `Document` is an entire article (potentially several thousand words), NOT a pre-chunked section.
 
 **Key implications for preprocessing**:
-- Do NOT write code to split or re-chunk these docs further — they are already short sections
-- Instead, focus on **combining related sections**: prepend the title section (`:0`) text to content sections (`:1`, `:2`, ...) to add entity name context without vocabulary mismatch
-- The real retrieval failure is **vocabulary mismatch** between queries and gold sections — not sections being too long
-- Grouping by article and prepending the `:0` title to `:1`/`:2` content sections is a powerful strategy
+- Documents are long and **should be chunked** by your preprocessor — splitting into sections, paragraphs, overlapping windows, or other strategies is encouraged
+- The primary retrieval challenge is **vocabulary mismatch** between queries and gold documents
+- Consider strategies like: section-based splitting, overlapping chunks, title/header prepending to each chunk, synonym expansion
+- Each chunk's `doc_id` must match the source `Document.doc_id` exactly
 
 Each `Document` has:
-- `doc_id` (str): unique identifier in format `"{page_id}:{section_index}"`
-- `text` (str): one Wikipedia section (~300-1000 words, already short)
+- `doc_id` (str): unique identifier for the article
+- `text` (str): full article text (potentially thousands of words)
 - `metadata` (dict): may contain `title`, `aliases`, and other fields
 
 ## Strategy Guidance

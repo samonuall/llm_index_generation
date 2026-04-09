@@ -17,7 +17,6 @@ from src.evaluation.scripts.get_data import (
     load_queries,
     load_full_corpus_streaming,
     SPLIT_MAP,
-    EXPECTED_SIZES,
 )
 
 
@@ -32,7 +31,7 @@ class TestQueryLoading:
             {
                 "query_id": "q1",
                 "query_content": "What is machine learning?",
-                "passage_qrels": [{"id": "doc1", "label": 1}],
+                "full_document_qrels": [{"id": "doc1", "label": 1}],
             },
             {
                 "query_id": "q2",
@@ -87,7 +86,7 @@ class TestQueryLoading:
             {
                 "query_id": f"q{i}",
                 "query_content": f"query {i}",
-                "passage_qrels": [{"id": f"doc{i}", "label": 1}],
+                "full_document_qrels": [{"id": f"doc{i}", "label": 1}],
             }
             for i in range(10)
         ]
@@ -111,17 +110,17 @@ class TestQueryLoading:
             {
                 "query_id": "q1",
                 "query_content": "valid query",
-                "passage_qrels": [{"id": "doc1", "label": 1}],
+                "full_document_qrels": [{"id": "doc1", "label": 1}],
             },
             {
                 "query_id": "q2",
                 "query_content": "no relevant docs",
-                "passage_qrels": [{"id": "doc2", "label": 0}],  # label=0, should be filtered
+                "full_document_qrels": [{"id": "doc2", "label": 0}],  # label=0, should be filtered
             },
             {
                 "query_id": "q3",
                 "query_content": "empty qrels",
-                "passage_qrels": [],  # empty, should be filtered
+                "full_document_qrels": [],  # empty, should be filtered
             },
         ]
         mock_load_dataset.return_value = mock_dataset
@@ -248,11 +247,6 @@ class TestSplitConfiguration:
             assert split in SPLIT_MAP
             assert SPLIT_MAP[split] == split  # They map to themselves
     
-    def test_expected_sizes_defined(self):
-        """Test that expected sizes are defined for all splits."""
-        for split in SPLIT_MAP.keys():
-            assert split in EXPECTED_SIZES
-            assert EXPECTED_SIZES[split] > 0
 
 
 class TestDataIntegrity:
@@ -265,7 +259,7 @@ class TestDataIntegrity:
             {
                 "query_id": "q1",
                 "query_content": "test query",
-                "passage_qrels": [{"id": "doc1", "label": 1}],
+                "full_document_qrels": [{"id": "doc1", "label": 1}],
             }
         ]
         mock_load_dataset.return_value = mock_dataset
@@ -354,12 +348,12 @@ class TestErrorHandling:
             {
                 "query_id": "q1",
                 "query_content": "valid",
-                "passage_qrels": [{"id": "doc1", "label": 1}],
+                "full_document_qrels": [{"id": "doc1", "label": 1}],
             },
             {
                 "query_id": "q2",
                 # Missing query_content
-                "passage_qrels": [{"id": "doc2", "label": 1}],
+                "full_document_qrels": [{"id": "doc2", "label": 1}],
             },
         ]
         mock_load_dataset.return_value = mock_dataset

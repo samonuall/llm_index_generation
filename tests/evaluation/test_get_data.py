@@ -25,7 +25,6 @@ from get_data import (
     load_queries,
     load_full_corpus_streaming,
     SPLIT_MAP,
-    EXPECTED_SIZES,
 )
 
 
@@ -33,31 +32,18 @@ class TestCacheDirectoryManagement:
     """Test cache directory creation and management."""
     
     def test_cache_dir_no_limit(self):
-        """Cache directory created without doc limit."""
-        cache_dir = get_cache_dir("tip_of_the_tongue", n_docs=None)
-        
+        """Cache directory created for a split."""
+        cache_dir = get_cache_dir("tip_of_the_tongue")
+
         # Should create data/<split>/ directory
         assert "tip_of_the_tongue" in str(cache_dir)
-        assert "docs" not in str(cache_dir)  # No suffix when no limit
-    
-    def test_cache_dir_with_limit(self):
-        """Cache directory includes doc limit in name."""
-        cache_dir = get_cache_dir("paper_retrieval", n_docs=5000)
-        
-        # Should create data/<split>_<n>docs/ directory
-        assert "paper_retrieval" in str(cache_dir)
-        assert "5000docs" in str(cache_dir)
+        assert "docs" not in str(cache_dir)
     
     def test_cache_dir_creates_directory(self):
         """Cache directory is created if it doesn't exist."""
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Patch the base path to use temp dir
-            with patch('get_data.Path') as mock_path:
-                mock_path.return_value.parents = [Path(tmpdir), Path(tmpdir), Path(tmpdir)]
-                cache_dir = get_cache_dir("test_split")
-                # Should not raise - directory is created
-                assert cache_dir is not None
+        cache_dir = get_cache_dir("tip_of_the_tongue")
+        assert cache_dir.exists()
+        assert cache_dir.is_dir()
 
 
 class TestDocumentStructureValidation:
@@ -425,17 +411,6 @@ class TestSplitConfiguration:
             assert isinstance(split_name, str)
             assert len(split_name) > 0
     
-    def test_expected_sizes_defined(self):
-        """Expected sizes are defined for all splits."""
-        for split_name in SPLIT_MAP:
-            assert split_name in EXPECTED_SIZES
-            assert EXPECTED_SIZES[split_name] > 0
-    
-    def test_expected_sizes_reasonable(self):
-        """Expected sizes are in reasonable ranges."""
-        for split, size in EXPECTED_SIZES.items():
-            assert size > 1000, f"{split} size {size} seems too small"
-            assert size < 2_000_000, f"{split} size {size} seems too large"
 
 
 class TestEdgeCases:

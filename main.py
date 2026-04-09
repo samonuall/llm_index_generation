@@ -4,8 +4,8 @@ main.py – CLI entry point for LLM-driven preprocessing agents.
 Usage:
     uv run python main.py --agent gemini_sdk --loops 5
     uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval
-    uv run python main.py --agent baseline --split paper_retrieval_5000docs
-    uv run python main.py --agent ai_assistant --split paper_retrieval_5000docs --loops 3
+    uv run python main.py --agent baseline --split paper_retrieval
+    uv run python main.py --agent ai_assistant --split paper_retrieval --loops 3
 
     # Analysis agent ablation conditions:
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent

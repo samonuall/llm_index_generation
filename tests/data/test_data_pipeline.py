@@ -4,8 +4,8 @@ tests/data/test_data_pipeline.py
 End-to-end workflow tests for the "data pipeline" represented by
 src.evaluation.scripts.get_data:
 
-  cache_dir = get_cache_dir(split, limit)
-  queries   = load_queries(split, n_queries, limit)
+  cache_dir = get_cache_dir(split)
+  queries   = load_queries(split, n_queries)
   docs      = load_full_corpus_streaming(split, limit)
 
 These tests:
@@ -42,11 +42,8 @@ def fake_cache_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def patch_cache_dir(monkeypatch, fake_cache_root: Path):
-    def _fake_get_cache_dir(split: str, n_docs=None) -> Path:
-        if n_docs:
-            d = fake_cache_root / f"{split}_{n_docs}docs"
-        else:
-            d = fake_cache_root / split
+    def _fake_get_cache_dir(split: str) -> Path:
+        d = fake_cache_root / split
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -75,18 +72,18 @@ def test_pipeline_cache_miss_creates_expected_files(monkeypatch, patch_cache_dir
         {
             "query_id": "q1",
             "query_content": "cat claws retractable",
-            "passage_qrels": [{"id": "doc_001", "label": 1}],
+            "full_document_qrels": [{"id": "doc_001", "label": 1}],
         },
         {
             "query_id": "q2",
             "query_content": "solar system gas giants",
-            "passage_qrels": [{"id": "doc_002", "label": 1}],
+            "full_document_qrels": [{"id": "doc_002", "label": 1}],
         },
         {
             # will be filtered out (no positive labels)
             "query_id": "q_bad",
             "query_content": "should drop",
-            "passage_qrels": [{"id": "doc_999", "label": 0}],
+            "full_document_qrels": [{"id": "doc_999", "label": 0}],
         },
     ]
 
@@ -101,7 +98,7 @@ def test_pipeline_cache_miss_creates_expected_files(monkeypatch, patch_cache_dir
         if config == "evaluation_queries":
             assert streaming is False
             return hf_queries
-        if config == "passage_corpus":
+        if config == "full_document_corpus":
             assert streaming is True
             return _StreamingDataset(hf_docs)
         raise AssertionError(f"Unexpected dataset config: {config}")
@@ -109,8 +106,8 @@ def test_pipeline_cache_miss_creates_expected_files(monkeypatch, patch_cache_dir
     monkeypatch.setattr(get_data, "load_dataset", fake_load_dataset)
 
     # --- Pipeline steps (mirrors get_data.main) ---
-    cache_dir = get_data.get_cache_dir(split, limit)
-    queries = get_data.load_queries(split, n_queries=n_queries, n_docs=limit)
+    cache_dir = get_data.get_cache_dir(split)
+    queries = get_data.load_queries(split, n_queries=n_queries)
     docs = get_data.load_full_corpus_streaming(split, max_docs=limit)
 
     # --- Verify returned transformed objects ---
@@ -142,7 +139,7 @@ def test_pipeline_cache_hit_skips_downloads(monkeypatch, patch_cache_dir):
         {
             "query_id": "q1",
             "query_content": "x",
-            "passage_qrels": [{"id": "doc_1", "label": 1}],
+            "full_document_qrels": [{"id": "doc_1", "label": 1}],
         }
     ]
     hf_docs = [
@@ -150,25 +147,25 @@ def test_pipeline_cache_hit_skips_downloads(monkeypatch, patch_cache_dir):
         {"document_id": "doc_2", "document_content": "Doc 2"},
     ]
 
-    calls = {"evaluation_queries": 0, "passage_corpus": 0}
+    calls = {"evaluation_queries": 0, "full_document_corpus": 0}
 
     def fake_load_dataset_first(name: str, config: str, split: str, streaming: bool = False):
         if config == "evaluation_queries":
             calls["evaluation_queries"] += 1
             return hf_queries
-        if config == "passage_corpus":
-            calls["passage_corpus"] += 1
+        if config == "full_document_corpus":
+            calls["full_document_corpus"] += 1
             return _StreamingDataset(hf_docs)
         raise AssertionError("unexpected")
 
     monkeypatch.setattr(get_data, "load_dataset", fake_load_dataset_first)
 
     # First run (cache miss)
-    _ = get_data.load_queries(split, n_queries=None, n_docs=limit)
+    _ = get_data.load_queries(split)
     _ = get_data.load_full_corpus_streaming(split, max_docs=limit)
 
     assert calls["evaluation_queries"] == 1
-    assert calls["passage_corpus"] == 1
+    assert calls["full_document_corpus"] == 1
 
     # Second run should not call load_dataset at all
     def boom(*a, **k):
@@ -176,7 +173,7 @@ def test_pipeline_cache_hit_skips_downloads(monkeypatch, patch_cache_dir):
 
     monkeypatch.setattr(get_data, "load_dataset", boom)
 
-    q2 = get_data.load_queries(split, n_queries=None, n_docs=limit)
+    q2 = get_data.load_queries(split)
     d2 = get_data.load_full_corpus_streaming(split, max_docs=limit)
 
     assert q2 == [{"query_id": "q1", "query_content": "x", "relevant_doc_ids": ["doc_1"]}]
@@ -201,12 +198,12 @@ def test_pipeline_relevant_doc_ids_are_present_in_downloaded_docs(monkeypatch, p
         {
             "query_id": "q1",
             "query_content": "about docA",
-            "passage_qrels": [{"id": "docA", "label": 1}, {"id": "docB", "label": 1}],
+            "full_document_qrels": [{"id": "docA", "label": 1}, {"id": "docB", "label": 1}],
         },
         {
             "query_id": "q2",
             "query_content": "about docC",
-            "passage_qrels": [{"id": "docC", "label": 1}],
+            "full_document_qrels": [{"id": "docC", "label": 1}],
         },
     ]
     hf_docs = [
@@ -220,13 +217,13 @@ def test_pipeline_relevant_doc_ids_are_present_in_downloaded_docs(monkeypatch, p
     def fake_load_dataset(name: str, config: str, split: str, streaming: bool = False):
         if config == "evaluation_queries":
             return hf_queries
-        if config == "passage_corpus":
+        if config == "full_document_corpus":
             return _StreamingDataset(hf_docs)
         raise AssertionError("unexpected")
 
     monkeypatch.setattr(get_data, "load_dataset", fake_load_dataset)
 
-    queries = get_data.load_queries(split, n_queries=None, n_docs=limit)
+    queries = get_data.load_queries(split)
     docs = get_data.load_full_corpus_streaming(split, max_docs=limit)
 
     doc_ids = {d["doc_id"] for d in docs}
@@ -248,7 +245,7 @@ def test_pipeline_limit_can_break_relevance_and_that_is_expected(monkeypatch, pa
         {
             "query_id": "q1",
             "query_content": "needs doc2",
-            "passage_qrels": [{"id": "doc2", "label": 1}],
+            "full_document_qrels": [{"id": "doc2", "label": 1}],
         }
     ]
     hf_docs = [
@@ -259,13 +256,13 @@ def test_pipeline_limit_can_break_relevance_and_that_is_expected(monkeypatch, pa
     def fake_load_dataset(name: str, config: str, split: str, streaming: bool = False):
         if config == "evaluation_queries":
             return hf_queries
-        if config == "passage_corpus":
+        if config == "full_document_corpus":
             return _StreamingDataset(hf_docs)
         raise AssertionError("unexpected")
 
     monkeypatch.setattr(get_data, "load_dataset", fake_load_dataset)
 
-    queries = get_data.load_queries(split, n_queries=None, n_docs=limit)
+    queries = get_data.load_queries(split)
     docs = get_data.load_full_corpus_streaming(split, max_docs=limit)
 
     assert queries[0]["relevant_doc_ids"] == ["doc2"]

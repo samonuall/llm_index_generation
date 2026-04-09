@@ -42,12 +42,8 @@ def fake_cache_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def patch_cache_dir(monkeypatch, fake_cache_root: Path):
-    def _fake_get_cache_dir(split: str, n_docs=None) -> Path:
-        # match get_data.get_cache_dir behavior: create dir
-        if n_docs:
-            d = fake_cache_root / f"{split}_{n_docs}docs"
-        else:
-            d = fake_cache_root / split
+    def _fake_get_cache_dir(split: str) -> Path:
+        d = fake_cache_root / split
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -59,9 +55,9 @@ def patch_cache_dir(monkeypatch, fake_cache_root: Path):
 # Query transformation tests
 # -----------------------------
 
-def test_load_queries_filters_to_positive_labels_and_uses_passage_qrels(monkeypatch, patch_cache_dir):
+def test_load_queries_filters_to_positive_labels_and_uses_full_document_qrels(monkeypatch, patch_cache_dir):
     """
-    When passage_qrels exists, it should be used.
+    When full_document_qrels exists, it should be used.
     Only qrels with label > 0 should be included.
     Queries with no positive relevant IDs should be dropped.
     """
@@ -71,17 +67,17 @@ def test_load_queries_filters_to_positive_labels_and_uses_passage_qrels(monkeypa
         {
             "query_id": "q1",
             "query_content": "foo",
-            "passage_qrels": [{"id": "d1", "label": 1}, {"id": "d2", "label": 0}],
+            "full_document_qrels": [{"id": "d1", "label": 1}, {"id": "d2", "label": 0}],
         },
         {
             "query_id": "q2",
             "query_content": "bar",
-            "passage_qrels": [{"id": "d3", "label": -1}],  # no positive -> drop
+            "full_document_qrels": [{"id": "d3", "label": -1}],  # no positive -> drop
         },
         {
             "query_id": "q3",
             "query_content": "baz",
-            "passage_qrels": [{"id": "d4", "label": 2}, {"id": "d5", "label": 1}],
+            "full_document_qrels": [{"id": "d4", "label": 2}, {"id": "d5", "label": 1}],
         },
     ]
 
@@ -99,22 +95,22 @@ def test_load_queries_filters_to_positive_labels_and_uses_passage_qrels(monkeypa
     ]
 
 
-def test_load_queries_falls_back_to_full_document_qrels(monkeypatch, patch_cache_dir):
-    """If passage_qrels is missing/None, load_queries should use full_document_qrels."""
+def test_load_queries_falls_back_to_passage_qrels(monkeypatch, patch_cache_dir):
+    """If full_document_qrels is missing/None, load_queries should use passage_qrels."""
     split = "paper_retrieval"
 
     hf_items = [
         {
             "query_id": "q1",
             "query_content": "x",
-            "passage_qrels": None,
-            "full_document_qrels": [{"id": "docA", "label": 1}],
+            "full_document_qrels": None,
+            "passage_qrels": [{"id": "docA", "label": 1}],
         },
         {
             "query_id": "q2",
             "query_content": "y",
-            # passage_qrels missing entirely
-            "full_document_qrels": [{"id": "docB", "label": 0}, {"id": "docC", "label": 1}],
+            # full_document_qrels missing entirely
+            "passage_qrels": [{"id": "docB", "label": 0}, {"id": "docC", "label": 1}],
         },
     ]
 
@@ -134,7 +130,7 @@ def test_load_queries_handles_missing_qrels_fields(monkeypatch, patch_cache_dir)
 
     hf_items = [
         {"query_id": "q1", "query_content": "x"},  # no qrels => drop
-        {"query_id": "q2", "query_content": "y", "passage_qrels": []},  # empty => drop
+        {"query_id": "q2", "query_content": "y", "full_document_qrels": []},  # empty => drop
         {"query_id": "q3", "query_content": "z", "full_document_qrels": [{"id": "d1", "label": 1}]},
     ]
 
@@ -152,9 +148,9 @@ def test_load_queries_applies_n_queries_limit_after_filtering(monkeypatch, patch
     split = "clinical_trial"
 
     hf_items = [
-        {"query_id": "q1", "query_content": "a", "passage_qrels": [{"id": "d1", "label": 1}]},
-        {"query_id": "q2", "query_content": "b", "passage_qrels": [{"id": "d2", "label": 1}]},
-        {"query_id": "q3", "query_content": "c", "passage_qrels": [{"id": "d3", "label": 1}]},
+        {"query_id": "q1", "query_content": "a", "full_document_qrels": [{"id": "d1", "label": 1}]},
+        {"query_id": "q2", "query_content": "b", "full_document_qrels": [{"id": "d2", "label": 1}]},
+        {"query_id": "q3", "query_content": "c", "full_document_qrels": [{"id": "d3", "label": 1}]},
     ]
     monkeypatch.setattr(get_data, "load_dataset", lambda *a, **k: hf_items)
 
@@ -172,14 +168,14 @@ def test_load_queries_writes_expected_jsonl_format(monkeypatch, patch_cache_dir)
         {
             "query_id": "q1",
             "query_content": "foo",
-            "passage_qrels": [{"id": "d1", "label": 1}],
+            "full_document_qrels": [{"id": "d1", "label": 1}],
         }
     ]
     monkeypatch.setattr(get_data, "load_dataset", lambda *a, **k: hf_items)
 
     out = get_data.load_queries(split)
 
-    cache_dir = get_data.get_cache_dir(split, None)
+    cache_dir = get_data.get_cache_dir(split)
     cache_file = cache_dir / "queries.jsonl"
     assert cache_file.exists()
 
@@ -250,7 +246,7 @@ def test_load_full_corpus_streaming_writes_expected_jsonl_format(monkeypatch, pa
 
     docs = get_data.load_full_corpus_streaming(split, max_docs=1)
 
-    cache_dir = get_data.get_cache_dir(split, 1)
+    cache_dir = get_data.get_cache_dir(split)
     cache_file = cache_dir / "documents.jsonl"
     assert cache_file.exists()
 
@@ -266,7 +262,7 @@ def test_load_full_corpus_streaming_reads_from_cache_without_calling_load_datase
     If cache file exists, function should return cached docs and never call load_dataset.
     """
     split = "code_retrieval"
-    cache_dir = get_data.get_cache_dir(split, 5)
+    cache_dir = get_data.get_cache_dir(split)
     cache_file = cache_dir / "documents.jsonl"
     cached = [
         {"doc_id": "x", "text": "cached", "metadata": {}},
@@ -290,7 +286,7 @@ def test_load_queries_reads_from_cache_without_calling_load_dataset(monkeypatch,
     If cache file exists, function should return cached queries and never call load_dataset.
     """
     split = "set_operation_entity_retrieval"
-    cache_dir = get_data.get_cache_dir(split, None)
+    cache_dir = get_data.get_cache_dir(split)
     cache_file = cache_dir / "queries.jsonl"
     cached = [
         {"query_id": "q1", "query_content": "cached", "relevant_doc_ids": ["d1"]},

@@ -160,18 +160,19 @@ results = evaluate(Preprocessor(), top_k=10)
 Run manually to refresh `data/`:
 
 ```bash
-uv run python src/evaluation/scripts/get_data.py            # default: 50 queries
-uv run python src/evaluation/scripts/get_data.py --n-queries 100
+uv run python -m src.evaluation.scripts.get_data --split tip_of_the_tongue
+uv run python -m src.evaluation.scripts.get_data --split tip_of_the_tongue --limit 5000
 ```
 
-Streams from HuggingFace (`jfkback/crumb`, `tip_of_the_tongue` split) — no large files stored.
+Streams from HuggingFace (`jfkback/crumb`, `full_document_corpus` config) — no large files stored.
+Data is cached to `data/<split>/`. Re-running with `--limit` overwrites existing cached data.
 Agents never call or import from `get_data.py`.
 
 ## Corpus
 
 - Dataset: [CRUMB](https://huggingface.co/datasets/jfkback/crumb) – `tip_of_the_tongue` task
 - Scope: 50 eval queries + their referenced documents (each query guaranteed to have a match)
-- Wikipedia full-document corpus; queries are "tip of the tongue" descriptions of entities
+- Full Wikipedia articles (loaded via `full_document_corpus` config); queries are "tip of the tongue" descriptions of entities
 
 ## Conventions
 

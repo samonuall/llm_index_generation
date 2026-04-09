@@ -285,12 +285,12 @@ def mock_crumb_dataset():
         {
             "query_id": "q1",
             "query_content": "What is machine learning?",
-            "passage_qrels": [{"id": "doc1", "label": 1}],
+            "full_document_qrels": [{"id": "doc1", "label": 1}],
         },
         {
             "query_id": "q2",
             "query_content": "Python programming tutorial",
-            "passage_qrels": [{"id": "doc2", "label": 1}],
+            "full_document_qrels": [{"id": "doc2", "label": 1}],
         },
     ]
 
