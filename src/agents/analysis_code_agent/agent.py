@@ -355,6 +355,7 @@ class AnalysisCodeAgent(AgentRunner):
             data.append({
                 "id": h.id,
                 "description": h.description,
+                "mechanism": getattr(h, "mechanism", ""),
                 "rationale": h.rationale,
                 "code": h.code,
                 "query_ids_to_test": h.query_ids_to_test,
