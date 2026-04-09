@@ -106,6 +106,7 @@ def _call_litellm(
     """Call LiteLLM (handles OpenAI-compatible proxies and other providers)."""
     import litellm
 
+    litellm.drop_params = True
     resp = litellm.completion(
         model=model,
         messages=messages,

@@ -107,21 +107,22 @@ class AnalysisAgent:
                 break
 
             # Append assistant message as dict (preserving tool_calls)
+            tool_calls = getattr(msg, "tool_calls", None) or []
             assistant_dict = {"role": "assistant", "content": msg.content}
-            if msg.tool_calls:
+            if tool_calls:
                 assistant_dict["tool_calls"] = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                     }
-                    for tc in msg.tool_calls
+                    for tc in tool_calls
                 ]
             messages.append(assistant_dict)
 
             # If tool calls present, dispatch them
-            if msg.tool_calls:
-                for tc in msg.tool_calls:
+            if tool_calls:
+                for tc in tool_calls:
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
@@ -278,7 +279,7 @@ class AnalysisAgent:
             text = msg.content or ""
 
             # Guardrail: if LLM produced tool calls or no <summary> tags, retry once
-            needs_retry = msg.tool_calls or "<summary>" not in text
+            needs_retry = (getattr(msg, "tool_calls", None) or False) or "<summary>" not in text
             if needs_retry:
                 summary_messages.append({"role": "assistant", "content": text})
                 summary_messages.append({

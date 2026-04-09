@@ -8,7 +8,7 @@ server_port: 8765
 server_persist_dir: ".bm25_cache"
 
 max_hypotheses: 4
-max_distractors: 999999   # relevant docs + this many distractors = ~10K corpus
+max_distractors: 9000     # relevant docs + this many distractors = ~10K corpus
 recall_improvement_threshold: 0.00001
 analysis_max_turns: 8
 min_tool_turns: 3
