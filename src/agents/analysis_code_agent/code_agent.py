@@ -25,6 +25,7 @@ class Hypothesis:
     description: str
     rationale: str
     code: str
+    mechanism: str = ""
     query_ids_to_test: list[str] = field(default_factory=list)
     falsifying_condition: str = ""
 
@@ -47,22 +48,6 @@ class HypothesisResult:
 
 
 class CodeAgent:
-    # Keyword lists for hypothesis taxonomy classification
-    _VOCAB_KW  = ["synonym", "alias", "abbreviat", "alternate name", "vocabular", "term expan", "keyword"]
-    _STRUCT_KW = ["chunk", "window", "overlap", "paragraph", "sentence", "section", "split", "merge"]
-    _CTX_KW    = ["title", "prepend", "breadcrumb", "context inject", "cross-section", "entity name", "header"]
-    _QB_KW     = ["tfidf", "tf-idf", "boost", "n-gram", "ngram", "reformat", "description-style", "query bridg"]
-    TAXONOMY_CATEGORIES = ["VOCABULARY", "STRUCTURE", "CONTEXT", "QUERY-BRIDGING"]
-
-    @staticmethod
-    def _classify(desc: str) -> str:
-        """Map a hypothesis description to a taxonomy category."""
-        d = desc.lower()
-        if any(k in d for k in CodeAgent._CTX_KW):    return "CONTEXT"
-        if any(k in d for k in CodeAgent._VOCAB_KW):  return "VOCABULARY"
-        if any(k in d for k in CodeAgent._QB_KW):     return "QUERY-BRIDGING"
-        if any(k in d for k in CodeAgent._STRUCT_KW): return "STRUCTURE"
-        return "VOCABULARY"  # default
 
     def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue", log_dir: pathlib.Path | None = None) -> None:
         self._tracker = tracker
@@ -120,8 +105,9 @@ class CodeAgent:
             )
             lines = []
             for ph in past_hypotheses:
+                mechanism_tag = f" [{ph['mechanism']}]" if ph.get("mechanism") else ""
                 lines.append(
-                    f"- **{ph['id']}: {ph['description']}** → "
+                    f"- **{ph['id']}: {ph['description']}**{mechanism_tag} → "
                     f"delta_recall@100={ph['delta_recall_100']:+.4f}, "
                     f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
                     f"proven={ph['proven']}. {ph.get('notes', '')}"
@@ -142,23 +128,33 @@ class CodeAgent:
             diagnosis = ""
             if all_failed and chunking_variations >= 3:
                 diagnosis = (
-                    "\n⚠ PATTERN DETECTED: All tested hypotheses were chunking/window variations and ALL failed. "
-                    "Chunking changes alone are not the solution. You MUST try fundamentally different strategies:\n"
-                    "  - Repeating the document title/entity name at the start of every chunk\n"
-                    "  - Extracting and indexing synonyms or alternative names from the document\n"
-                    "  - Using the first sentence of the document as a standalone high-weight chunk\n"
-                    "  - Do NOT generate more chunking window variations.\n"
+                    "\n⚠ PATTERN DETECTED: Multiple chunking/window variations have all failed. "
+                    "The retrieval problem is NOT about chunk boundaries — it is about vocabulary. "
+                    "Do NOT generate any more chunking or window strategies.\n"
                 )
             elif all_failed:
                 diagnosis = (
-                    "\n⚠ All previous hypotheses failed. Try a completely different approach — "
-                    "do not make incremental variations of what has already been tried.\n"
+                    "\n⚠ All previous hypotheses failed. Every new hypothesis must be "
+                    "mechanically different — not a renaming or minor tweak of what was tried.\n"
                 )
+
+            past_descriptions = [ph["description"] for ph in past_hypotheses]
+            diversity_instruction = (
+                "\n## Diversity Requirement\n"
+                "The approaches already tried are listed above. Each new hypothesis MUST be "
+                "mechanically different from all of them — different *operation* on the text, "
+                "not just a different parameter or a renaming.\n"
+                "Give each hypothesis a self-chosen label that describes its core mechanism "
+                "(e.g. 'TITLE-INJECTION', 'SYNONYM-EXPANSION', 'SENTENCE-LEAD', 'NGRAM-OVERLAY' "
+                "— invent your own if none fit). No two hypotheses in this round may share the same label.\n"
+                f"Already tried: {'; '.join(past_descriptions)}\n"
+            )
 
             past_section = (
                 "\n## Previously Tested Hypotheses (DO NOT repeat these)\n"
                 + "\n".join(lines)
                 + diagnosis
+                + diversity_instruction
             )
 
         if persistent_failure_ids:
@@ -171,36 +167,6 @@ class CodeAgent:
         else:
             persistent_section = ""
 
-        # Identify which taxonomy categories past hypotheses already covered
-        taxonomy_categories = self.TAXONOMY_CATEGORIES
-        tried_categories: list[str] = []
-        if past_hypotheses:
-            tried_categories = [CodeAgent._classify(ph["description"]) for ph in past_hypotheses]
-
-        # Assign categories to this round's hypotheses — prioritise unexplored ones
-        unexplored = [c for c in taxonomy_categories if c not in tried_categories]
-        explored   = [c for c in taxonomy_categories if c in tried_categories]
-        assigned_categories = (unexplored + explored)[:n]
-        while len(assigned_categories) < n:
-            assigned_categories.append(taxonomy_categories[len(assigned_categories) % len(taxonomy_categories)])
-
-        taxonomy_section = f"""
-## Hypothesis Diversity Requirement
-Each hypothesis MUST target a DIFFERENT strategic category. No two hypotheses may use the same approach.
-Assign each hypothesis exactly one category from the list below and label it clearly.
-
-**Categories:**
-- **VOCABULARY** — synonym expansion, entity aliases, abbreviation normalization, alternate names
-- **STRUCTURE** — chunking strategy, section merging, overlap windows, grouping adjacent sections
-- **CONTEXT** — title/entity name prepending, cross-section context injection, breadcrumb paths
-- **QUERY-BRIDGING** — description-style chunk reformatting, n-gram extraction, term frequency reweighting
-
-{"**Categories already tried in past rounds:** " + ", ".join(sorted(set(tried_categories))) if tried_categories else ""}
-**Required category assignments for this round:** {", ".join(f"H{i+1}→{c}" for i, c in enumerate(assigned_categories))}
-
-You MUST follow these assignments. Do not deviate.
-"""
-
         prompt = f"""## Analysis Summary
 {analysis_summary}
 
@@ -210,19 +176,18 @@ You MUST follow these assignments. Do not deviate.
 ```
 
 {past_section}
-{persistent_section}{taxonomy_section}
-Generate exactly {n} hypotheses to improve the preprocessing code.
+{persistent_section}Generate exactly {n} hypotheses to improve the preprocessing code.
 Each hypothesis must be a complete, working preprocess.py implementation.
 
 IMPORTANT NOTES:
 - The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
 - The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
-- Naive paragraph splitting hurts BM25 because short chunks lose term co-occurrence. If chunking, use overlapping windows or keep chunks substantial (200+ words).
+- Documents are full Wikipedia articles. You decide how to chunk them — splitting into sections, sentences, or overlapping windows is valid and encouraged.
 
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
 ### H1: <description>
-Category: {assigned_categories[0] if assigned_categories else "VOCABULARY"}
+Mechanism: <your own short label for the core operation, e.g. TITLE-INJECTION>
 Rationale: <rationale>
 Query IDs: <comma-separated query_ids>
 Falsifying: <condition>
@@ -230,9 +195,7 @@ Falsifying: <condition>
 <complete preprocess.py code>
 ```
 
-Repeat for H2 (Category: {assigned_categories[1] if len(assigned_categories) > 1 else "STRUCTURE"}), \
-H3 (Category: {assigned_categories[2] if len(assigned_categories) > 2 else "CONTEXT"}), \
-H4 (Category: {assigned_categories[3] if len(assigned_categories) > 3 else "QUERY-BRIDGING"}).
+Repeat for H2, H3, H4. Each must have a DIFFERENT Mechanism label.
 
 The code MUST start with the standard imports:
 ```python
@@ -318,6 +281,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 Hypothesis(
                     id=h.get("id", f"H{len(hypotheses) + 1}"),
                     description=h.get("description", ""),
+                    mechanism=h.get("mechanism", ""),
                     rationale=h.get("rationale", ""),
                     code=h.get("code", ""),
                     query_ids_to_test=h.get("query_ids_to_test", []),
@@ -370,20 +334,23 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             if not code:
                 continue
 
-            # Extract rationale and query_ids from text between header and code
+            # Extract fields from text between header and code
             between = text[header_end:next_header_start]
+            mechanism_match = re.search(r"Mechanism:\s*(.+?)(?:\n|$)", between)
             rationale_match = re.search(r"Rationale:\s*(.+?)(?:\n|$)", between)
             qids_match = re.search(r"Query IDs?:\s*(.+?)(?:\n|$)", between)
             falsify_match = re.search(r"Falsif(?:ying|ication):\s*(.+?)(?:\n|$)", between)
 
             query_ids = []
             if qids_match:
-                # Parse comma-separated query IDs
                 query_ids = [q.strip().strip("[]\"'") for q in qids_match.group(1).split(",")]
+
+            mechanism = mechanism_match.group(1).strip() if mechanism_match else ""
 
             results.append({
                 "id": h_id,
                 "description": desc,
+                "mechanism": mechanism,
                 "rationale": rationale_match.group(1).strip() if rationale_match else "",
                 "code": code,
                 "query_ids_to_test": query_ids,
