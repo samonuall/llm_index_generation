@@ -240,7 +240,7 @@ def _save_iteration_summary(
         print(f"\n{'='*60}")
         print("IMPROVEMENT OVER ITERATIONS")
         print(f"{'='*60}")
-        print(f"{'Iter':<6} {'Recall@10':<12} {'Recall@100':<12} {'nDCG@10':<12} {'Chunks/Doc':<12}")
+        print(f"{'Iter':<6} {'Recall@100':<12} {'Recall@1000':<12} {'nDCG@10':<12} {'Chunks/Doc':<12}")
         print("-"*60)
         for it in all_iterations:
             metrics = it.get('metrics', {})
@@ -248,8 +248,8 @@ def _save_iteration_summary(
             iter_num = it.get('iteration', '?')
             print(
                 f"{iter_num:<6} "
-                f"{metrics.get('recall_at_10', 0):<12.4f} "
                 f"{metrics.get('recall_at_100', 0):<12.4f} "
+                f"{metrics.get('recall_at_1000', 0):<12.4f} "
                 f"{metrics.get('ndcg_at_10', 0):<12.4f} "
                 f"{config.get('chunks_per_doc', 0):<12.2f}"
             )
@@ -259,8 +259,8 @@ def _save_iteration_summary(
         last = all_iterations[-1]['metrics']
         print("-"*60)
         print(f"{'Δ':<6} "
-              f"{last.get('recall_at_10', 0) - first.get('recall_at_10', 0):+.4f}       "
               f"{last.get('recall_at_100', 0) - first.get('recall_at_100', 0):+.4f}       "
+              f"{last.get('recall_at_1000', 0) - first.get('recall_at_1000', 0):+.4f}       "
               f"{last.get('ndcg_at_10', 0) - first.get('ndcg_at_10', 0):+.4f}")
         print(f"{'='*60}\n")
     
@@ -348,8 +348,8 @@ def evaluate(
 
     # [Keep all existing retrieval and metrics computation code]
     query_results = []
-    recall_at_10_hits = 0
     recall_at_100_hits = 0
+    recall_at_1000_hits = 0
     ndcg_at_10_total = 0.0
     
     for query in queries:
@@ -362,8 +362,12 @@ def evaluate(
             if doc_id not in doc_scores or sc > doc_scores[doc_id]:
                 doc_scores[doc_id] = sc
         
-        ranked_docs = sorted(doc_scores.items(), key=lambda x: (-x[1], x[0]))[:top_k]
-        ranked_doc_ids = [doc_id for doc_id, _ in ranked_docs]
+        # Sort ALL docs, don't truncate yet (we need 1000 for recall calculation)
+        ranked_docs_full = sorted(doc_scores.items(), key=lambda x: (-x[1], x[0]))
+        ranked_doc_ids = [doc_id for doc_id, _ in ranked_docs_full]
+        
+        # For saving results, limit to top_k
+        ranked_docs = ranked_docs_full[:top_k]
         
         query_results.append({
             "query_id": query.query_id,
@@ -372,10 +376,10 @@ def evaluate(
         
         relevant = set(map(str, query.relevant_doc_ids))
         
-        if any(doc_id in relevant for doc_id in ranked_doc_ids[:10]):
-            recall_at_10_hits += 1
         if any(doc_id in relevant for doc_id in ranked_doc_ids[:100]):
             recall_at_100_hits += 1
+        if any(doc_id in relevant for doc_id in ranked_doc_ids[:1000]):
+            recall_at_1000_hits += 1
         
         dcg = 0.0
         for rank, doc_id in enumerate(ranked_doc_ids[:10], start=1):
@@ -385,13 +389,13 @@ def evaluate(
         ndcg_at_10_total += (dcg / idcg) if idcg > 0 else 0.0
     
     n_queries = len(queries)
-    recall_at_10 = recall_at_10_hits / n_queries
     recall_at_100 = recall_at_100_hits / n_queries
+    recall_at_1000 = recall_at_1000_hits / n_queries
     ndcg_at_10 = ndcg_at_10_total / n_queries
     
     print(f"\nQuick metrics ({n_queries} queries, top-{top_k}):")
-    print(f"  Recall@10  : {recall_at_10:.4f}")
-    print(f"  Recall@100 : {recall_at_100:.4f}")
+    print(f"  Recall@100  : {recall_at_100:.4f}")
+    print(f"  Recall@1000 : {recall_at_1000:.4f}")
     print(f"  nDCG@10    : {ndcg_at_10:.4f}")
 
     # Build results structure
@@ -408,8 +412,8 @@ def evaluate(
             "chunks_per_doc": len(chunks) / len(docs),
         },
         "metrics": {
-            "recall_at_10": recall_at_10,
             "recall_at_100": recall_at_100,
+            "recall_at_1000": recall_at_1000,
             "ndcg_at_10": ndcg_at_10,
         },
         "crumb_metrics": None,
@@ -554,7 +558,7 @@ def main() -> None:
             # Sort by timestamp
             all_results.sort(key=lambda x: x.get('timestamp', ''))
             
-            print(f"\n{'Agent':<25} {'Recall@10':<12} {'Recall@100':<12} {'nDCG@10':<12} {'Timestamp':<20}")
+            print(f"\n{'Agent':<25} {'Recall@100':<12} {'Recall@1000':<12} {'nDCG@10':<12} {'Timestamp':<20}")
             print("-"*85)
             
             for r in all_results:
@@ -567,8 +571,8 @@ def main() -> None:
                 
                 print(
                     f"{agent_display:<25} "
-                    f"{metrics.get('recall_at_10', 0):<12.4f} "
                     f"{metrics.get('recall_at_100', 0):<12.4f} "
+                    f"{metrics.get('recall_at_1000', 0):<12.4f} "
                     f"{metrics.get('ndcg_at_10', 0):<12.4f} "
                     f"{timestamp:<20}"
                 )

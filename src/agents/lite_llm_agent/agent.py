@@ -48,12 +48,19 @@ class LiteLLMAgent(AgentRunner):
         self._test_mode = test_mode
 
     def on_baseline_complete(self, baseline_results: dict) -> None:
-        k = baseline_results["top_k"]
+        """Format baseline results for display - supports both recall@100 and recall@1000."""
+        # Get recall@100 and recall@1000 if available
+        recall_100 = baseline_results.get('recall_at_100', baseline_results.get('recall_at_k', 0))
+        recall_1000 = baseline_results.get('recall_at_1000', 0)
         ndcg_k = baseline_results.get("ndcg_k", 10)
+        ndcg = baseline_results.get('ndcg', 0)
+        n_chunks = baseline_results.get('n_chunks', 0)
+        
         info = (
-            f"- Recall@{k}:    {baseline_results['recall_at_k']:.4f}\n"
-            f"- nDCG@{ndcg_k}:    {baseline_results['ndcg']:.4f}\n"
-            f"- Chunks:       {baseline_results['n_chunks']}"
+            f"- Recall@100:  {recall_100:.4f}\n"
+            f"- Recall@1000: {recall_1000:.4f}\n"
+            f"- nDCG@{ndcg_k}:     {ndcg:.4f}\n"
+            f"- Chunks:      {n_chunks}"
         )
         self._system_instruction = self._system_instruction_template.replace("{baseline_info}", info)
 

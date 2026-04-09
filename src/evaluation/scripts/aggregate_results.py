@@ -77,24 +77,30 @@ def load_all_results(
                 # Add quick metrics
                 metrics = data.get('metrics', {})
                 if metrics:
-                    record['recall@10'] = metrics.get('recall_at_10', None)
+                    # Load the correct metric keys from the evaluation results
                     record['recall@100'] = metrics.get('recall_at_100', None)
+                    record['recall@1000'] = metrics.get('recall_at_1000', None)
                     record['ndcg@10_quick'] = metrics.get('ndcg_at_10', None)
+                else:
+                    record['recall@100'] = None
+                    record['recall@1000'] = None
+                    record['ndcg@10_quick'] = None
                 
                 # Add CRUMB metrics if available
                 crumb = data.get('crumb_metrics', {}) or {}
                 if crumb:
                     record['nDCG@10'] = crumb.get('nDCG@10', None)
                     record['nDCG@5'] = crumb.get('nDCG@5', None)
-                    record['R@10'] = crumb.get('R@10', None)
+                    # Use the correct CRUMB metric keys
                     record['R@100'] = crumb.get('R@100', None)
+                    record['R@1000'] = crumb.get('R@1000', None)
                     record['P@10'] = crumb.get('P@10', None)
                     record['RR@10'] = crumb.get('RR@10', None)
                 else:
                     record['nDCG@10'] = None
                     record['nDCG@5'] = None
-                    record['R@10'] = None
                     record['R@100'] = None
+                    record['R@1000'] = None
                     record['P@10'] = None
                     record['RR@10'] = None
                 
@@ -127,29 +133,84 @@ def print_comparison_table(results: List[Dict], sort_by: str = 'nDCG@10'):
     print("\n" + "="*140)
     print("EVALUATION RESULTS COMPARISON")
     print("="*140)
-    print(f"\n{'Agent':<20} {'Split':<25} {'Docs':<10} {'Queries':<8} {'Chunks/Doc':<12} {'nDCG@10':<10} {'R@10':<10} {'R@100':<10}")
+    print(f"\n{'Agent':<20} {'Split':<25} {'Docs':<10} {'Queries':<8} {'Chunks/Doc':<12} {'nDCG@10':<10} {'R@100':<10} {'R@1000':<10}")
     print("-"*140)
+    
+    # Track values for averaging
+    sum_docs = 0
+    sum_queries = 0
+    sum_chunks_per_doc = 0
+    sum_ndcg = 0
+    sum_r100 = 0
+    sum_r1000 = 0
+    count_ndcg = 0
+    count_r100 = 0
+    count_r1000 = 0
     
     for r in results:
         # Try CRUMB metrics first, fall back to quick metrics
         ndcg = r.get('nDCG@10') or r.get('ndcg@10_quick')
-        r10 = r.get('R@10') or r.get('recall@10')
         r100 = r.get('R@100') or r.get('recall@100')
+        r1000 = r.get('R@1000') or r.get('recall@1000')
         
         ndcg_str = f"{ndcg:.4f}" if ndcg is not None else "N/A"
-        r10_str = f"{r10:.4f}" if r10 is not None else "N/A"
         r100_str = f"{r100:.4f}" if r100 is not None else "N/A"
+        r1000_str = f"{r1000:.4f}" if r1000 is not None else "N/A"
         
-        # Add indicator if using quick metrics
-        suffix = ""
-        if r.get('nDCG@10') is None and ndcg is not None:
-            suffix = "*"  # Mark fallback metrics
-        
+        # Try CRUMB metrics first, fall back to quick metrics
+        ndcg = r.get('nDCG@10') or r.get('ndcg@10_quick')
+        r100 = r.get('R@100') or r.get('recall@100')
+        r1000 = r.get('R@1000') or r.get('recall@1000')
+
+        # Mark each metric with asterisk if using fallback
+        ndcg_suffix = "*" if (r.get('nDCG@10') is None and ndcg is not None) else ""
+        r100_suffix = "*" if (r.get('R@100') is None and r100 is not None) else ""
+        r1000_suffix = "*" if (r.get('R@1000') is None and r1000 is not None) else ""
+
+        ndcg_str = f"{ndcg:.4f}{ndcg_suffix}" if ndcg is not None else "N/A"
+        r100_str = f"{r100:.4f}{r100_suffix}" if r100 is not None else "N/A"
+        r1000_str = f"{r1000:.4f}{r1000_suffix}" if r1000 is not None else "N/A"
+
         print(
             f"{r['agent']:<20} {r['split']:<25} {r['n_docs']:<10,} "
             f"{r['n_queries']:<8} {r['chunks_per_doc']:<12.2f} "
-            f"{ndcg_str:<10}{suffix} {r100_str:<10} {r10_str:<10}"
+            f"{ndcg_str:<11} {r100_str:<11} {r1000_str:<11}"
         )
+        
+        # Accumulate for averages
+        sum_docs += r['n_docs']
+        sum_queries += r['n_queries']
+        sum_chunks_per_doc += r['chunks_per_doc']
+        
+        if ndcg is not None:
+            sum_ndcg += ndcg
+            count_ndcg += 1
+        if r100 is not None:
+            sum_r100 += r100
+            count_r100 += 1
+        if r1000 is not None:
+            sum_r1000 += r1000
+            count_r1000 += 1
+    
+    # Print averages row
+    print("-"*140)
+    n = len(results)
+    avg_docs = sum_docs / n if n > 0 else 0
+    avg_queries = sum_queries / n if n > 0 else 0
+    avg_chunks_per_doc = sum_chunks_per_doc / n if n > 0 else 0
+    avg_ndcg = sum_ndcg / count_ndcg if count_ndcg > 0 else None
+    avg_r100 = sum_r100 / count_r100 if count_r100 > 0 else None
+    avg_r1000 = sum_r1000 / count_r1000 if count_r1000 > 0 else None
+    
+    avg_ndcg_str = f"{avg_ndcg:.4f}" if avg_ndcg is not None else "N/A"
+    avg_r100_str = f"{avg_r100:.4f}" if avg_r100 is not None else "N/A"
+    avg_r1000_str = f"{avg_r1000:.4f}" if avg_r1000 is not None else "N/A"
+    
+    print(
+        f"{'AVERAGE':<20} {'':<25} {avg_docs:<10,.0f} "
+        f"{avg_queries:<8.0f} {avg_chunks_per_doc:<12.2f} "
+        f"{avg_ndcg_str:<10} {avg_r100_str:<10} {avg_r1000_str:<10}"
+    )
     
     print("="*140)
     print(f"\nTotal runs: {len(results)}")
@@ -198,25 +259,72 @@ def print_by_split_table(results: List[Dict]):
         print(f"\n{'='*60}")
         print(f"Split: {split} ({len(split_results)} runs)")
         print(f"{'='*60}")
-        print(f"\n{'Agent':<20} {'nDCG@10':<10} {'R@100':<10} {'P@10':<10} {'Chunks/Doc':<12}")
-        print("-"*70)
+        print(f"\n{'Agent':<20} {'nDCG@10':<10} {'R@100':<10} {'R@1000':<10} {'P@10':<10} {'Chunks/Doc':<12}")
+        print("-"*90)
         
         # Sort by nDCG descending
         split_results = sorted(split_results, key=lambda x: (x.get('nDCG@10') or 0), reverse=True)
         
+        # Track values for averaging
+        sum_ndcg = 0
+        sum_r100 = 0
+        sum_r1000 = 0
+        sum_p10 = 0
+        sum_chunks_per_doc = 0
+        count_ndcg = 0
+        count_r100 = 0
+        count_r1000 = 0
+        count_p10 = 0
+        
         for r in split_results:
-            ndcg = r.get('nDCG@10')
+            ndcg = r.get('nDCG@10') or r.get('ndcg@10_quick')
+            r100 = r.get('R@100') or r.get('recall@100')
+            r1000 = r.get('R@1000') or r.get('recall@1000')
             p10 = r.get('P@10')
-            r100 = r.get('R@100')
             
             ndcg_str = f"{ndcg:.4f}" if ndcg is not None else "N/A"
-            p10_str = f"{p10:.4f}" if p10 is not None else "N/A"
             r100_str = f"{r100:.4f}" if r100 is not None else "N/A"
+            r1000_str = f"{r1000:.4f}" if r1000 is not None else "N/A"
+            p10_str = f"{p10:.4f}" if p10 is not None else "N/A"
             
             print(
-                f"{r['agent']:<20} {ndcg_str:<10} {r100_str:<10} {p10_str:<10} "
+                f"{r['agent']:<20} {ndcg_str:<10} {r100_str:<10} {r1000_str:<10} {p10_str:<10} "
                 f"{r['chunks_per_doc']:<12.2f}"
             )
+            
+            # Accumulate for averages
+            sum_chunks_per_doc += r['chunks_per_doc']
+            if ndcg is not None:
+                sum_ndcg += ndcg
+                count_ndcg += 1
+            if r100 is not None:
+                sum_r100 += r100
+                count_r100 += 1
+            if r1000 is not None:
+                sum_r1000 += r1000
+                count_r1000 += 1
+            if p10 is not None:
+                sum_p10 += p10
+                count_p10 += 1
+        
+        # Print averages row
+        print("-"*90)
+        n = len(split_results)
+        avg_ndcg = sum_ndcg / count_ndcg if count_ndcg > 0 else None
+        avg_r100 = sum_r100 / count_r100 if count_r100 > 0 else None
+        avg_r1000 = sum_r1000 / count_r1000 if count_r1000 > 0 else None
+        avg_p10 = sum_p10 / count_p10 if count_p10 > 0 else None
+        avg_chunks_per_doc = sum_chunks_per_doc / n if n > 0 else 0
+        
+        avg_ndcg_str = f"{avg_ndcg:.4f}" if avg_ndcg is not None else "N/A"
+        avg_r100_str = f"{avg_r100:.4f}" if avg_r100 is not None else "N/A"
+        avg_r1000_str = f"{avg_r1000:.4f}" if avg_r1000 is not None else "N/A"
+        avg_p10_str = f"{avg_p10:.4f}" if avg_p10 is not None else "N/A"
+        
+        print(
+            f"{'AVERAGE':<20} {avg_ndcg_str:<10} {avg_r100_str:<10} {avg_r1000_str:<10} {avg_p10_str:<10} "
+            f"{avg_chunks_per_doc:<12.2f}"
+        )
 
 
 def export_to_csv(results: List[Dict], output_path: str):
