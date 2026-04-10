@@ -59,6 +59,7 @@ class AnalysisAgent:
         self._max_turns = config.get("analysis_max_turns", 8)
         self._min_tool_turns = config.get("min_tool_turns", 3)
         self._bash_timeout = config.get("bash_timeout_seconds", 30)
+        self._llm_timeout = config.get("analysis_llm_timeout", None)
         # Only pass api_key explicitly for proxy; native providers read key from env.
         _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_key = _proxy_key if config.get("api_base") else None
@@ -180,6 +181,7 @@ class AnalysisAgent:
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                timeout=self._llm_timeout,
             )
             if tools:
                 kwargs["tools"] = tools
@@ -274,6 +276,7 @@ class AnalysisAgent:
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                timeout=self._llm_timeout,
             )
             msg = response.choices[0].message
             text = msg.content or ""
@@ -296,6 +299,7 @@ class AnalysisAgent:
                     temperature=self._temperature,
                     api_key=self._api_key,
                     api_base=self._api_base,
+                    timeout=self._llm_timeout,
                 )
                 text = response2.choices[0].message.content or "No summary generated."
 

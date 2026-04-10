@@ -8,9 +8,10 @@ Overrides AgentRunner.run() to implement:
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
-import random
+
 import subprocess
 import sys
 import time
@@ -46,20 +47,20 @@ def _load_config(overrides: dict | None = None) -> dict:
     return config
 
 
-def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, seed: int = 42):
-    """Load queries and a manageable corpus: all relevant docs + sampled distractors.
+def _load_data(split: str = "tip_of_the_tongue", max_distractors: int | None = None, seed: int = 42):
+    """Load queries and corpus from data/.
 
-    With 1M+ doc corpora, loading everything is impractical for fast iteration.
-    We keep ALL relevant documents (gold answers) and sample max_distractors from
-    the rest, giving a realistic but fast eval corpus (~10K docs total by default).
+    If max_distractors is set, keeps all relevant docs + reservoir-samples that many
+    distractors (~10K corpus for fast iteration). If None, loads the full corpus.
     """
+    import random
     from schema import Document, EvalQuery
 
     data_dir = _PROJECT_ROOT / "data" / split
     if not data_dir.exists():
         data_dir = _PROJECT_ROOT / "data"
 
-    # Load queries first to know which doc_ids are relevant
+    # Load queries
     queries = []
     queries_path = data_dir / "queries.jsonl"
     with queries_path.open(encoding="utf-8") as f:
@@ -75,35 +76,41 @@ def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, se
     for q in queries:
         relevant_ids.update(q.relevant_doc_ids)
 
-    # Stream documents: always keep relevant, reservoir-sample distractors
-    rng = random.Random(seed)
-    relevant_docs: list[Document] = []
-    distractor_reservoir: list[Document] = []
-
+    # Load documents — optionally with reservoir sampling
     docs_path = data_dir / "documents.jsonl"
-    distractor_count = 0
-    with docs_path.open(encoding="utf-8") as f:
-        for line in f:
-            d = json.loads(line)
-            doc = Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
-            if doc.doc_id in relevant_ids:
-                relevant_docs.append(doc)
-            else:
-                distractor_count += 1
-                if len(distractor_reservoir) < max_distractors:
-                    distractor_reservoir.append(doc)
+    if max_distractors is None:
+        docs: list[Document] = []
+        with docs_path.open(encoding="utf-8") as f:
+            for line in f:
+                d = json.loads(line)
+                docs.append(Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {})))
+        print(f"[data] Corpus: {len(docs)} docs total, {len(queries)} queries")
+    else:
+        rng = random.Random(seed)
+        relevant_docs: list[Document] = []
+        distractor_reservoir: list[Document] = []
+        distractor_count = 0
+        with docs_path.open(encoding="utf-8") as f:
+            for line in f:
+                d = json.loads(line)
+                doc = Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
+                if doc.doc_id in relevant_ids:
+                    relevant_docs.append(doc)
                 else:
-                    # Reservoir sampling: replace with decreasing probability
-                    j = rng.randint(0, distractor_count - 1)
-                    if j < max_distractors:
-                        distractor_reservoir[j] = doc
+                    distractor_count += 1
+                    if len(distractor_reservoir) < max_distractors:
+                        distractor_reservoir.append(doc)
+                    else:
+                        j = rng.randint(0, distractor_count - 1)
+                        if j < max_distractors:
+                            distractor_reservoir[j] = doc
+        docs = relevant_docs + distractor_reservoir
+        rng.shuffle(docs)
+        print(
+            f"[data] Corpus: {len(relevant_docs)} relevant + {len(distractor_reservoir)} distractors "
+            f"= {len(docs)} docs (from {distractor_count + len(relevant_docs)} available)"
+        )
 
-    docs = relevant_docs + distractor_reservoir
-    rng.shuffle(docs)
-    print(
-        f"[data] Corpus: {len(relevant_docs)} relevant + {len(distractor_reservoir)} distractors "
-        f"= {len(docs)} docs total (from {distractor_count + len(relevant_docs)} available)"
-    )
     return docs, queries
 
 
@@ -212,15 +219,16 @@ class AnalysisCodeAgent(AgentRunner):
         )
         atexit.register(self._kill_server)
 
-        # Wait for server to be ready (up to 15s)
-        for i in range(30):
+        # Wait for server to be ready (up to 300s — large persisted indexes take time)
+        max_wait = 300
+        for i in range(max_wait * 2):
             time.sleep(0.5)
             if self._client.health():
                 print(f"[agent] BM25 server ready (took {(i+1)*0.5:.1f}s).")
                 return
 
         raise RuntimeError(
-            f"BM25 server failed to start after 15s. "
+            f"BM25 server failed to start after {max_wait}s. "
             f"Check: uv run python {server_path} --port {port}"
         )
 
@@ -355,7 +363,6 @@ class AnalysisCodeAgent(AgentRunner):
             data.append({
                 "id": h.id,
                 "description": h.description,
-                "mechanism": getattr(h, "mechanism", ""),
                 "rationale": h.rationale,
                 "code": h.code,
                 "query_ids_to_test": h.query_ids_to_test,
@@ -454,7 +461,7 @@ class AnalysisCodeAgent(AgentRunner):
         """Override AgentRunner.run() with analysis+hypothesis loop."""
 
         # Load data
-        max_distractors = self._config.get("max_distractors", 9000)
+        max_distractors = self._config.get("max_distractors", None)
         seed = self._config.get("seed", 42)
         documents, queries = _load_data(self.split, max_distractors=max_distractors, seed=seed)
         self._documents = documents
@@ -518,7 +525,7 @@ class AnalysisCodeAgent(AgentRunner):
             print("[agent] Building 'current' index on BM25 server ...")
             try:
                 chunks = self._preprocess_with_current_code(documents, current_code)
-                self._client.build_index("current", chunks, persist=True)
+                self._client.build_index("current", chunks, persist=False)
                 print(f"[agent] 'current' index built with {len(chunks)} chunks.")
             except Exception as e:
                 print(f"[agent] Index build failed: {e}")
@@ -560,14 +567,14 @@ class AnalysisCodeAgent(AgentRunner):
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
             persistent_fails = journal.persistent_failure_ids(min_iters=len(journal.iterations))
             query_lookup = {q.query_id: q.query_text for q in queries} if self._use_contrastive else None
-            hypotheses = code_agent.generate_hypotheses(
+            hypotheses = asyncio.run(code_agent.generate_hypotheses_async(
                 analysis_result.summary,
                 current_code,
                 n=max_hypotheses,
                 past_hypotheses=all_past_hypotheses if (all_past_hypotheses and self._use_history) else None,
                 persistent_failure_ids=persistent_fails if (persistent_fails and self._use_history) else None,
                 query_lookup=query_lookup,
-            )
+            ))
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")
 
             if not hypotheses:
@@ -590,7 +597,6 @@ class AnalysisCodeAgent(AgentRunner):
                 all_past_hypotheses.append({
                     "id": r.hypothesis.id,
                     "description": r.hypothesis.description,
-                    "mechanism": getattr(r.hypothesis, "mechanism", ""),
                     "delta_recall_100": r.delta_recall_100,
                     "delta_recall_10": r.delta_recall_10,
                     "delta_ndcg_10": r.delta_ndcg_10,

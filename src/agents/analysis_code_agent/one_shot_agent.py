@@ -43,8 +43,6 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     else:
         api_base = config.get("api_base")
     temperature = config.get("code_temperature", 1.0)
-    max_distractors = config.get("max_distractors", 9000)
-
     # --- Load data ---
     import subprocess, atexit, sys
     from .agent import _load_data
@@ -57,7 +55,7 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
         sys.path.insert(0, str(_EVAL_DIR))
 
     print("[one_shot] Loading data ...")
-    documents, queries = _load_data(split, max_distractors=max_distractors)
+    documents, queries = _load_data(split)
     print(f"[one_shot] {len(documents)} docs, {len(queries)} queries.")
 
     # --- Load baseline ---
@@ -150,6 +148,7 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
             temperature=temperature,
             api_key=proxy_api_key if api_base else None,
             api_base=api_base,
+            timeout=config.get("code_llm_timeout"),
         )
         tracker.record_llm_call(response, time.time() - t0, agent="one_shot")
         text = response.choices[0].message.content or ""
