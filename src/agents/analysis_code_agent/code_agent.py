@@ -25,7 +25,6 @@ class Hypothesis:
     description: str
     rationale: str
     code: str
-    mechanism: str = ""
     query_ids_to_test: list[str] = field(default_factory=list)
     falsifying_condition: str = ""
 
@@ -57,6 +56,7 @@ class CodeAgent:
         # Only pass api_key explicitly for proxy; native providers read key from env.
         _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_key = _proxy_key if self._api_base else None
+        self._llm_timeout = config.get("code_llm_timeout", None)
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)
         self._max_hypotheses = config.get("max_hypotheses", 4)
         self._split = split
@@ -105,9 +105,8 @@ class CodeAgent:
             )
             lines = []
             for ph in past_hypotheses:
-                mechanism_tag = f" [{ph['mechanism']}]" if ph.get("mechanism") else ""
                 lines.append(
-                    f"- **{ph['id']}: {ph['description']}**{mechanism_tag} → "
+                    f"- **{ph['id']}: {ph['description']}** → "
                     f"delta_recall@100={ph['delta_recall_100']:+.4f}, "
                     f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
                     f"proven={ph['proven']}. {ph.get('notes', '')}"
@@ -144,9 +143,6 @@ class CodeAgent:
                 "The approaches already tried are listed above. Each new hypothesis MUST be "
                 "mechanically different from all of them — different *operation* on the text, "
                 "not just a different parameter or a renaming.\n"
-                "Give each hypothesis a self-chosen label that describes its core mechanism "
-                "(e.g. 'TITLE-INJECTION', 'SYNONYM-EXPANSION', 'SENTENCE-LEAD', 'NGRAM-OVERLAY' "
-                "— invent your own if none fit). No two hypotheses in this round may share the same label.\n"
                 f"Already tried: {'; '.join(past_descriptions)}\n"
             )
 
@@ -222,6 +218,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                timeout=self._llm_timeout,
             )
             if self._tracker:
                 self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
@@ -281,7 +278,6 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 Hypothesis(
                     id=h.get("id", f"H{len(hypotheses) + 1}"),
                     description=h.get("description", ""),
-                    mechanism=h.get("mechanism", ""),
                     rationale=h.get("rationale", ""),
                     code=h.get("code", ""),
                     query_ids_to_test=h.get("query_ids_to_test", []),
@@ -290,6 +286,265 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             )
 
         return hypotheses
+
+    # ------------------------------------------------------------------
+    # Two-phase hypothesis generation (reduces per-call token load)
+    # ------------------------------------------------------------------
+
+    async def generate_hypotheses_async(
+        self,
+        analysis_summary: str,
+        current_code: str,
+        n: int = 4,
+        past_hypotheses: list[dict] | None = None,
+        persistent_failure_ids: list[str] | None = None,
+        query_lookup: dict[str, str] | None = None,
+    ) -> list[Hypothesis]:
+        """Two-phase hypothesis generation: ideas first, then code in parallel.
+
+        Phase 1: Single LLM call to generate N hypothesis ideas (no code).
+        Phase 2: N parallel async LLM calls to generate code for each idea.
+        """
+        # --- Phase 1: Generate ideas (no code) ---
+        ideas = self._generate_hypothesis_ideas(
+            analysis_summary, current_code, n,
+            past_hypotheses=past_hypotheses,
+            persistent_failure_ids=persistent_failure_ids,
+            query_lookup=query_lookup,
+        )
+        if not ideas:
+            return []
+
+        print(f"[code_agent] Phase 1: generated {len(ideas)} hypothesis ideas, generating code in parallel ...")
+
+        # --- Phase 2: Generate code for each idea in parallel ---
+        import asyncio
+        tasks = [
+            self._generate_code_for_idea(idea, current_code, analysis_summary)
+            for idea in ideas
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        hypotheses = []
+        for idea, result in zip(ideas, results):
+            if isinstance(result, Exception):
+                print(f"[code_agent] Code generation failed for {idea['id']}: {result}")
+                continue
+            if result is not None:
+                hypotheses.append(result)
+
+        print(f"[code_agent] Phase 2: {len(hypotheses)}/{len(ideas)} hypotheses generated successfully.")
+        return hypotheses
+
+    def _generate_hypothesis_ideas(
+        self,
+        analysis_summary: str,
+        current_code: str,
+        n: int = 4,
+        past_hypotheses: list[dict] | None = None,
+        persistent_failure_ids: list[str] | None = None,
+        query_lookup: dict[str, str] | None = None,
+    ) -> list[dict]:
+        """Phase 1: Generate hypothesis ideas without code (single LLM call)."""
+
+        # Reuse the same past_section / persistent_section logic from generate_hypotheses
+        past_section = ""
+        if past_hypotheses:
+            all_failed = all(not ph["proven"] for ph in past_hypotheses)
+            chunking_variations = sum(
+                1 for ph in past_hypotheses
+                if any(w in ph["description"].lower() for w in ["chunk", "window", "overlap", "paragraph", "sentence"])
+            )
+            lines = []
+            for ph in past_hypotheses:
+                lines.append(
+                    f"- **{ph['id']}: {ph['description']}** → "
+                    f"delta_recall@100={ph['delta_recall_100']:+.4f}, "
+                    f"delta_ndcg@10={ph['delta_ndcg_10']:+.4f}, "
+                    f"proven={ph['proven']}. {ph.get('notes', '')}"
+                )
+                if query_lookup:
+                    improved = ph.get("improved_query_ids", [])[:5]
+                    regressed = ph.get("regressed_query_ids", [])[:5]
+                    if improved or regressed:
+                        lines.append("  **What changed (contrastive):**")
+                    for qid in improved:
+                        qt = query_lookup.get(qid, "")[:120]
+                        lines.append(f"  ✓ fixed   [{qid}] \"{qt}\"")
+                    for qid in regressed:
+                        qt = query_lookup.get(qid, "")[:120]
+                        lines.append(f"  ✗ broke   [{qid}] \"{qt}\"")
+
+            diagnosis = ""
+            if all_failed and chunking_variations >= 3:
+                diagnosis = (
+                    "\n⚠ PATTERN DETECTED: Multiple chunking/window variations have all failed. "
+                    "The retrieval problem is NOT about chunk boundaries — it is about vocabulary. "
+                    "Do NOT generate any more chunking or window strategies.\n"
+                )
+            elif all_failed:
+                diagnosis = (
+                    "\n⚠ All previous hypotheses failed. Every new hypothesis must be "
+                    "mechanically different — not a renaming or minor tweak of what was tried.\n"
+                )
+
+            past_descriptions = [ph["description"] for ph in past_hypotheses]
+            diversity_instruction = (
+                "\n## Diversity Requirement\n"
+                "The approaches already tried are listed above. Each new hypothesis MUST be "
+                "mechanically different from all of them — different *operation* on the text, "
+                "not just a different parameter or a renaming.\n"
+                f"Already tried: {'; '.join(past_descriptions)}\n"
+            )
+
+            past_section = (
+                "\n## Previously Tested Hypotheses (DO NOT repeat these)\n"
+                + "\n".join(lines)
+                + diagnosis
+                + diversity_instruction
+            )
+
+        persistent_section = ""
+        if persistent_failure_ids:
+            pf_ids_str = ", ".join(persistent_failure_ids[:30]) + ("..." if len(persistent_failure_ids) > 30 else "")
+            persistent_section = (
+                f"## Persistent Failures (failing EVERY iteration so far — highest priority)\n"
+                f"These {len(persistent_failure_ids)} query IDs have never been retrieved correctly: {pf_ids_str}\n"
+                f"At least one hypothesis MUST specifically target these queries.\n\n"
+            )
+
+        prompt = f"""## Analysis Summary
+{analysis_summary}
+
+## Current preprocess.py
+```python
+{current_code}
+```
+
+{past_section}
+{persistent_section}Generate exactly {n} hypothesis IDEAS to improve the preprocessing code.
+Do NOT include code — just describe each idea clearly.
+
+IMPORTANT NOTES:
+- The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
+- The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
+- Documents are full Wikipedia articles. You decide how to chunk them — splitting into sections, sentences, or overlapping windows is valid and encouraged.
+
+Output each hypothesis idea using this format (NO code):
+
+### H1: <description>
+Rationale: <detailed rationale explaining why this approach should improve retrieval>
+Query IDs: <comma-separated query_ids this targets>
+Falsifying: <condition that would prove this wrong>
+
+Repeat for H2, H3, H4.
+"""
+
+        messages = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            _t0 = time.time()
+            response = completion(
+                model=self._model,
+                messages=messages,
+                temperature=self._temperature,
+                api_key=self._api_key,
+                api_base=self._api_base,
+                timeout=self._llm_timeout,
+            )
+            if self._tracker:
+                self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
+            text = response.choices[0].message.content or ""
+            self._log_call("generate_ideas", messages, text)
+        except Exception as e:
+            print(f"[code_agent] Idea generation failed: {e}")
+            return []
+
+        raw = self._parse_hypotheses_blocks(text, require_code=False)
+        if raw is None:
+            raw = self._parse_hypotheses_json(text)
+        if not raw:
+            print("[code_agent] No ideas parsed from Phase 1 response.")
+            return []
+
+        return raw[:n]
+
+    async def _generate_code_for_idea(
+        self,
+        idea: dict,
+        current_code: str,
+        analysis_summary: str,
+    ) -> Hypothesis | None:
+        """Phase 2: Generate code for a single hypothesis idea (async LLM call)."""
+        from .llm_call import async_completion
+
+        prompt = f"""## Task
+Write a complete, working `preprocess.py` implementation for this hypothesis:
+
+### {idea['id']}: {idea['description']}
+Rationale: {idea.get('rationale', '')}
+
+## Current preprocess.py (base to build on)
+```python
+{current_code}
+```
+
+## Brief Analysis Context
+{analysis_summary[:2000]}
+
+## Requirements
+- Output ONLY a single ```python``` code block with the complete preprocess.py
+- The code MUST start with the standard imports:
+```python
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "evaluation"))
+from typing import List
+from schema import Document, Chunk
+from base import BasePreprocessor
+```
+- Define `class Preprocessor(BasePreprocessor)` with a `preprocess(self, docs: List[Document]) -> List[Chunk]` method
+- chunk.doc_id must exactly match the source Document.doc_id
+- The documents have EMPTY metadata dicts — do NOT rely on doc.metadata
+- Build on top of the current code, don't throw it away
+"""
+
+        messages = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        _t0 = time.time()
+        response = await async_completion(
+            model=self._model,
+            messages=messages,
+            temperature=self._temperature,
+            api_key=self._api_key,
+            api_base=self._api_base,
+            timeout=self._llm_timeout,
+        )
+        if self._tracker:
+            self._tracker.record_llm_call(response, time.time() - _t0, agent="code")
+        text = response.choices[0].message.content or ""
+        self._log_call(f"generate_code_{idea['id']}", messages, text)
+
+        # Extract code block
+        code_match = re.search(r"```python\s*\n(.*?)```", text, re.DOTALL)
+        if not code_match:
+            print(f"[code_agent] No code block found for {idea['id']}")
+            return None
+
+        code = code_match.group(1).strip()
+        return Hypothesis(
+            id=idea.get("id", "H?"),
+            description=idea.get("description", ""),
+            rationale=idea.get("rationale", ""),
+            code=code,
+            query_ids_to_test=idea.get("query_ids_to_test", []),
+            falsifying_condition=idea.get("falsifying_condition", ""),
+        )
 
     def _parse_hypotheses_json(self, text: str) -> list[dict] | None:
         """Try to parse hypotheses from <hypotheses>JSON</hypotheses> tags."""
@@ -305,16 +560,22 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             print(f"[code_agent] JSON parse error: {e}")
             return None
 
-    def _parse_hypotheses_blocks(self, text: str) -> list[dict] | None:
-        """Parse hypotheses from markdown blocks: ### H1: desc + ```python code```."""
+    def _parse_hypotheses_blocks(self, text: str, require_code: bool = True) -> list[dict] | None:
+        """Parse hypotheses from markdown blocks: ### H1: desc + ```python code```.
+
+        If require_code is False, hypotheses without code blocks are still returned
+        (used for Phase 1 idea-only parsing).
+        """
         # Find all hypothesis headers
         header_pattern = r"###\s+(H\d+)\s*:\s*(.+?)(?:\n|$)"
         code_pattern = r"```python\s*\n(.*?)```"
 
         headers = list(re.finditer(header_pattern, text))
-        codes = list(re.finditer(code_pattern, text, re.DOTALL))
+        if not headers:
+            return None
 
-        if not headers or not codes:
+        codes = list(re.finditer(code_pattern, text, re.DOTALL))
+        if require_code and not codes:
             return None
 
         results = []
@@ -331,12 +592,11 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                     code = c.group(1).strip()
                     break
 
-            if not code:
+            if require_code and not code:
                 continue
 
             # Extract fields from text between header and code
             between = text[header_end:next_header_start]
-            mechanism_match = re.search(r"Mechanism:\s*(.+?)(?:\n|$)", between)
             rationale_match = re.search(r"Rationale:\s*(.+?)(?:\n|$)", between)
             qids_match = re.search(r"Query IDs?:\s*(.+?)(?:\n|$)", between)
             falsify_match = re.search(r"Falsif(?:ying|ication):\s*(.+?)(?:\n|$)", between)
@@ -345,17 +605,16 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             if qids_match:
                 query_ids = [q.strip().strip("[]\"'") for q in qids_match.group(1).split(",")]
 
-            mechanism = mechanism_match.group(1).strip() if mechanism_match else ""
-
-            results.append({
+            entry = {
                 "id": h_id,
                 "description": desc,
-                "mechanism": mechanism,
                 "rationale": rationale_match.group(1).strip() if rationale_match else "",
-                "code": code,
                 "query_ids_to_test": query_ids,
                 "falsifying_condition": falsify_match.group(1).strip() if falsify_match else "",
-            })
+            }
+            if code is not None:
+                entry["code"] = code
+            results.append(entry)
 
         return results if results else None
 
@@ -404,7 +663,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             print(f"[code_agent] {hypothesis.id} validation error: {validation_error[:120]}")
             return result
 
-        preprocess_timeout = 60  # seconds
+        preprocess_timeout = 600  # seconds — full corpus can be 200K+ docs
 
         try:
             # Always test on all queries for reliable delta measurement.
@@ -547,6 +806,7 @@ The code MUST:
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                timeout=self._llm_timeout,
             )
             if self._tracker:
                 self._tracker.record_llm_call(response, time.time() - _t0, agent="code")

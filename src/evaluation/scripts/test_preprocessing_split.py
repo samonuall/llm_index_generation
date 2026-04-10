@@ -375,11 +375,10 @@ def evaluate(
         })
         
         relevant = set(map(str, query.relevant_doc_ids))
-        
-        if any(doc_id in relevant for doc_id in ranked_doc_ids[:100]):
-            recall_at_100_hits += 1
-        if any(doc_id in relevant for doc_id in ranked_doc_ids[:1000]):
-            recall_at_1000_hits += 1
+        n_relevant = len(relevant) or 1
+
+        recall_at_100_hits += len(relevant & set(ranked_doc_ids[:100])) / n_relevant
+        recall_at_1000_hits += len(relevant & set(ranked_doc_ids[:1000])) / n_relevant
         
         dcg = 0.0
         for rank, doc_id in enumerate(ranked_doc_ids[:10], start=1):

@@ -27,6 +27,9 @@ app = FastAPI(title="BM25 Index Server")
 _indexes: dict[str, dict] = {}
 # Each entry: {"retriever": bm25s.BM25, "chunks": list[dict], "n_chunks": int}
 
+# Staging area for batched index builds
+_staging: dict[str, list[dict]] = {}
+
 _persist_dir: pathlib.Path | None = None
 
 
@@ -41,6 +44,14 @@ class ChunkIn(BaseModel):
 
 class BuildRequest(BaseModel):
     chunks: list[ChunkIn]
+    persist: bool = False
+
+
+class AppendChunksRequest(BaseModel):
+    chunks: list[ChunkIn]
+
+
+class FinalizeRequest(BaseModel):
     persist: bool = False
 
 
@@ -173,6 +184,41 @@ def batch_retrieve(name: str, req: BatchRetrieveRequest):
         all_results.append({"query_id": q.query_id, "ranked_docs": ranked})
 
     return {"results": all_results}
+
+
+@app.post("/index/{name}/append")
+def append_chunks(name: str, req: AppendChunksRequest):
+    """Append chunks to a staging buffer for batched index building."""
+    if name not in _staging:
+        _staging[name] = []
+    _staging[name].extend(c.model_dump() for c in req.chunks)
+    return {"status": "appended", "n_staged": len(_staging[name])}
+
+
+@app.post("/index/{name}/finalize")
+def finalize_index(name: str, req: FinalizeRequest):
+    """Build the BM25 index from all staged chunks, then clear the staging buffer."""
+    if name not in _staging or not _staging[name]:
+        raise HTTPException(400, f"No staged chunks for index '{name}'")
+
+    chunk_dicts = _staging.pop(name)
+    texts = [c["text"] for c in chunk_dicts]
+
+    retriever = _build_bm25(texts)
+    _indexes[name] = {
+        "retriever": retriever,
+        "chunks": chunk_dicts,
+        "n_chunks": len(chunk_dicts),
+    }
+
+    if req.persist and _persist_dir is not None:
+        save_dir = _persist_dir / name
+        save_dir.mkdir(parents=True, exist_ok=True)
+        retriever.save(str(save_dir / "bm25"))
+        with (save_dir / "chunks.json").open("w", encoding="utf-8") as f:
+            json.dump(chunk_dicts, f)
+
+    return {"status": "built", "n_chunks": len(chunk_dicts)}
 
 
 @app.delete("/index/{name}")

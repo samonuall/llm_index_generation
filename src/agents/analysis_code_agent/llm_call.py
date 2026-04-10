@@ -44,6 +44,7 @@ def completion(
     temperature: float = 0.7,
     api_key: str | None = None,
     api_base: str | None = None,
+    timeout: float | None = None,
     **kwargs: Any,
 ) -> _Response:
     """Route all models through LiteLLM for unified tool-call support."""
@@ -51,7 +52,7 @@ def completion(
         # Gemini must go directly to Google — always use Google key, never the proxy or OpenAI key
         api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         api_base = None
-    return _call_litellm(model, messages, temperature, api_key, api_base, **kwargs)
+    return _call_litellm(model, messages, temperature, api_key, api_base, timeout=timeout, **kwargs)
 
 
 
@@ -61,13 +62,14 @@ def _call_litellm(
     temperature: float,
     api_key: str | None,
     api_base: str | None,
+    timeout: float | None = None,
     **kwargs: Any,
 ) -> _Response:
     """Call LiteLLM (handles OpenAI-compatible proxies and other providers)."""
     import litellm
 
     litellm.drop_params = True
-    resp = litellm.completion(
+    call_kwargs = dict(
         model=model,
         messages=messages,
         temperature=temperature,
@@ -75,4 +77,50 @@ def _call_litellm(
         api_base=api_base,
         **kwargs,
     )
+    if timeout is not None:
+        call_kwargs["timeout"] = timeout
+    resp = litellm.completion(**call_kwargs)
     return resp  # LiteLLM response already has .choices[0].message.content and .usage
+
+
+async def async_completion(
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.7,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | None = None,
+    **kwargs: Any,
+) -> _Response:
+    """Async version of completion(), using litellm.acompletion()."""
+    if model.startswith("gemini/"):
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        api_base = None
+    return await _acall_litellm(model, messages, temperature, api_key, api_base, timeout=timeout, **kwargs)
+
+
+async def _acall_litellm(
+    model: str,
+    messages: list[dict],
+    temperature: float,
+    api_key: str | None,
+    api_base: str | None,
+    timeout: float | None = None,
+    **kwargs: Any,
+) -> _Response:
+    """Async LiteLLM call."""
+    import litellm
+
+    litellm.drop_params = True
+    call_kwargs = dict(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        api_key=api_key,
+        api_base=api_base,
+        **kwargs,
+    )
+    if timeout is not None:
+        call_kwargs["timeout"] = timeout
+    resp = await litellm.acompletion(**call_kwargs)
+    return resp
