@@ -178,7 +178,13 @@ Each hypothesis must be a complete, working preprocess.py implementation.
 IMPORTANT NOTES:
 - The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
 - The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
-- Documents are full Wikipedia articles. You decide how to chunk them — splitting into sections, sentences, or overlapping windows is valid and encouraged.
+- Documents are full-length documents (potentially thousands of words), not pre-chunked passages.
+
+## CRITICAL: Regression Prevention
+- **ALWAYS keep the original full-document chunk** alongside any new chunks. The eval uses max-score aggregation per doc_id, so extra chunks can only help — but removing the original full-doc chunk risks losing queries that currently succeed.
+- Do NOT split documents into sections/paragraphs WITHOUT also keeping the full original text as chunk 0. The safest pattern: chunk_0 = full original text, chunk_1..N = additional targeted chunks.
+- Do NOT aggressively filter or remove text from the original document. Only add to it.
+- The corpus has 200K+ docs. Splitting each into 10-20 small chunks creates millions of index entries, inflating the index with short metadata-heavy chunks that score high due to BM25 length normalization. Keep additional chunks to 1-3 per document maximum.
 
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
@@ -428,7 +434,13 @@ Do NOT include code — just describe each idea clearly.
 IMPORTANT NOTES:
 - The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
 - The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
-- Documents are full Wikipedia articles. You decide how to chunk them — splitting into sections, sentences, or overlapping windows is valid and encouraged.
+- Documents are full-length documents (potentially thousands of words), not pre-chunked passages.
+
+## CRITICAL: Regression Prevention
+- **ALWAYS keep the original full-document chunk** alongside any new chunks. The eval uses max-score aggregation per doc_id, so extra chunks can only help — but removing the original full-doc chunk risks losing queries that currently succeed.
+- Do NOT propose splitting documents into sections/paragraphs WITHOUT also keeping the full original text as chunk 0.
+- Do NOT propose aggressively filtering or removing text from the original document. Only add to it.
+- The corpus has 200K+ docs. Avoid creating many small chunks per doc (keep to 1-3 additional chunks max) — over-chunking inflates the index with short metadata-heavy chunks that score high due to BM25 length normalization.
 
 Output each hypothesis idea using this format (NO code):
 
@@ -509,6 +521,8 @@ from base import BasePreprocessor
 - chunk.doc_id must exactly match the source Document.doc_id
 - The documents have EMPTY metadata dicts — do NOT rely on doc.metadata
 - Build on top of the current code, don't throw it away
+- **CRITICAL**: Always emit the original full-document text as chunk_0 (the passthrough chunk). Any additional chunks are extras alongside it, not replacements. This prevents regressions on currently-working queries.
+- Keep additional chunks to 1-3 per document max. Do NOT create many small chunks per doc.
 """
 
         messages = [

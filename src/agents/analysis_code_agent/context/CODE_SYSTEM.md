@@ -25,18 +25,31 @@ The `preprocess(self, docs: List[Document]) -> List[Chunk]` method must:
 
 ## CRITICAL: Corpus Structure
 
-The corpus contains **full Wikipedia articles**. Each `Document` is an entire article (potentially several thousand words), NOT a pre-chunked section.
+Each `Document` is a full document (potentially several thousand words), NOT a pre-chunked passage. The corpus description in the analysis provides details about the specific document type and domain.
 
 **Key implications for preprocessing**:
-- Documents are long and **should be chunked** by your preprocessor — splitting into sections, paragraphs, overlapping windows, or other strategies is encouraged
+- Documents are long — chunking strategies (sections, paragraphs, windows) may help, but read the warnings below first
 - The primary retrieval challenge is **vocabulary mismatch** between queries and gold documents
-- Consider strategies like: section-based splitting, overlapping chunks, title/header prepending to each chunk, synonym expansion
+- Consider strategies like: title prepending, text augmentation, selective content boosting
 - Each chunk's `doc_id` must match the source `Document.doc_id` exactly
 
+## CRITICAL: Avoid Over-Chunking and Regressions
+
+**Always keep the original full-document chunk.** Any new chunks (section-level, paragraph-level, etc.) should be ADDED alongside the original, not replace it. The full-document chunk is the baseline — removing it risks regressing queries that currently succeed. The evaluation uses max-score aggregation across chunks per document, so additional chunks can only help (they give new chances to match) as long as the original is preserved.
+
+**Do NOT split documents into many small chunks without the full-doc fallback.** Splitting each document into 10-20 chunks creates millions of index entries, which:
+- Inflates the index with short boilerplate-heavy chunks that score artificially high due to BM25 length normalization
+- Shifts IDF values as terms appear across more chunks
+- Causes the fixed-size retrieval candidate pool to cover fewer unique documents
+
+**Do NOT aggressively filter or remove text.** Removing sections you think are "noise" destroys signal for queries where those terms actually help. Only remove text when you have concrete evidence it causes false positives AND the removal won't hurt other queries.
+
+**The safest pattern is: keep original chunk + add a small number of targeted extra chunks** (e.g., one chunk with title prepended to a key section, or one chunk with extracted key terms). Limit to 1-3 additional chunks per document.
+
 Each `Document` has:
-- `doc_id` (str): unique identifier for the article
-- `text` (str): full article text (potentially thousands of words)
-- `metadata` (dict): may contain `title`, `aliases`, and other fields
+- `doc_id` (str): unique identifier
+- `text` (str): full document text (potentially thousands of words)
+- `metadata` (dict): may contain `title`, `aliases`, and other fields — but may also be empty depending on the corpus
 
 ## Strategy Guidance
 

@@ -1,5 +1,9 @@
 ## CRITICAL: Corpus Structure
 
-The corpus contains **full Wikipedia articles about movies and TV shows**. Each entry in `documents.jsonl` is a complete article (not a section or chunk). Documents may be several thousand words long and contain multiple sections (plot, cast, production, reception, etc.).
+The corpus contains **~232K full Wikipedia articles** (movies, TV shows, and related topics). Each entry in `documents.jsonl` is a complete article with raw wiki markup (infobox templates, section headers, wiki links, references, etc.).
 
-The `doc_id` is a unique identifier for each article.
+Documents are typically several thousand words long with multiple sections (Plot/Synopsis, Cast, Production, Reception, Awards, etc.).
+
+The queries are **"tip of the tongue" descriptions** — vague, colloquial, indirect descriptions of media content (e.g. "Girl in red dress gets chloroformed by shop owner"). The core retrieval challenge is vocabulary mismatch: queries use informal language while documents use formal Wikipedia prose.
+
+The `doc_id` is a unique identifier for each article. Document metadata dicts are EMPTY — any useful info (title, etc.) must be extracted from the document text itself.

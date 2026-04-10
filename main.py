@@ -8,7 +8,7 @@ Usage:
     uv run python main.py --agent ai_assistant --split paper_retrieval --loops 3
 
     # Analysis agent ablation conditions:
-    uv run python main.py --agent analysis_code_agent --loops 2 --condition agent
+    uv run python main.py --agent analysis_code_agent --loops 3 --condition agent
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_history
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_contrastive
 
