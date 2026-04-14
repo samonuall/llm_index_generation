@@ -4,6 +4,9 @@ Generate ablation experiment results tables.
 
 Usage:
     python src/evaluation/scripts/generate_ablation_tables.py
+    python src/evaluation/scripts/generate_ablation_tables.py --model "openai/gpt4o"
+    python src/evaluation/scripts/generate_ablation_tables.py --condition "agent"
+    python src/evaluation/scripts/generate_ablation_tables.py --model "openai/gpt4o" --condition "agent"
 """
 
 import json
@@ -68,7 +71,6 @@ def aggregate_by_split_and_condition(results: List[Dict[str, Any]],
         ]
         
         if not valid_runs:
-            print(f"Warning: Skipping {model}/{split}/{condition} - no valid runs with complete metrics")
             continue
         
         n_runs = len(valid_runs)
@@ -87,15 +89,6 @@ def aggregate_by_split_and_condition(results: List[Dict[str, Any]],
         # Compute deltas
         row['delta_recall_100'] = row['final_recall_100'] - row['baseline_recall_100']
         row['delta_ndcg_10'] = row['final_ndcg_10'] - row['baseline_ndcg_10']
-        
-        # Optional: add latency stats
-        latency_times = [r['latency']['total_wall_time_seconds'] for r in valid_runs if 'latency' in r and r['latency']]
-        latency_tokens = [r['latency']['total_tokens'] for r in valid_runs if 'latency' in r and r['latency']]
-        
-        if latency_times:
-            row['avg_wall_time'] = sum(latency_times) / len(latency_times)
-        if latency_tokens:
-            row['avg_tokens'] = sum(latency_tokens) / len(latency_tokens)
         
         rows.append(row)
     
@@ -132,68 +125,138 @@ def format_delta(value: float, format_type: str = 'markdown') -> str:
     else:
         return f"{value:+.3f}"
 
-def generate_markdown_table(df: pd.DataFrame, title: str = "Results") -> str:
+def generate_markdown_table(df: pd.DataFrame, title: str = "Results", show_model: bool = True, show_condition: bool = True) -> str:
     """Generate a Markdown table."""
-    # Sort by split name
-    df = df.sort_values('split')
+    # Sort by model, condition, then split
+    df = df.sort_values(['model', 'condition', 'split'])
     
     table = f"## {title}\n\n"
-    table += "| Split | Baseline R@100 | Final R@100 | Δ Recall | Baseline nDCG@10 | Final nDCG@10 | Δ nDCG@10 |\n"
-    table += "|-------|----------------|-------------|----------|------------------|---------------|------------|\n"
+    
+    # Build header dynamically
+    headers = []
+    if show_model:
+        headers.append("Model")
+    if show_condition:
+        headers.append("Condition")
+    headers.extend(["Split", "Baseline R@100", "Final R@100", "Δ Recall", "Baseline nDCG@10", "Final nDCG@10", "Δ nDCG@10"])
+    
+    table += "| " + " | ".join(headers) + " |\n"
+    table += "|" + "|".join(["-------"] * len(headers)) + "|\n"
     
     for _, row in df.iterrows():
-        table += f"| {row['split']} "
-        table += f"| {row['baseline_recall_100']:.3f} "
-        table += f"| {row['final_recall_100']:.3f} "
-        table += f"| {format_delta(row['delta_recall_100'], 'markdown')} "
-        table += f"| {row['baseline_ndcg_10']:.3f} "
-        table += f"| {row['final_ndcg_10']:.3f} "
-        table += f"| {format_delta(row['delta_ndcg_10'], 'markdown')} |\n"
+        cells = []
+        if show_model:
+            cells.append(f"**{row['model']}**")
+        if show_condition:
+            cells.append(row['condition'])
+        cells.extend([
+            row['split'],
+            f"{row['baseline_recall_100']:.3f}",
+            f"{row['final_recall_100']:.3f}",
+            format_delta(row['delta_recall_100'], 'markdown'),
+            f"{row['baseline_ndcg_10']:.3f}",
+            f"{row['final_ndcg_10']:.3f}",
+            format_delta(row['delta_ndcg_10'], 'markdown')
+        ])
+        table += "| " + " | ".join(cells) + " |\n"
     
     table += "\n"
     return table
 
-def generate_latex_table(df: pd.DataFrame, title: str = "Results", label: str = "tab:results") -> str:
+def generate_latex_table(df: pd.DataFrame, title: str = "Results", label: str = "tab:results", 
+                         show_model: bool = True, show_condition: bool = True) -> str:
     """Generate a LaTeX table."""
-    # Sort by split name
-    df = df.sort_values('split')
+    # Sort by model, condition, then split
+    df = df.sort_values(['model', 'condition', 'split'])
     
-    table = "\\begin{table}[ht]\n"
+    # Determine column count
+    n_cols = 6  # metrics columns
+    if show_model:
+        n_cols += 1
+    if show_condition:
+        n_cols += 1
+    
+    col_spec = "|l" * (n_cols - 6) + "|" + "c" * 6 + "|"
+    
+    table = "% Required LaTeX packages:\n"
+    table += "% \\usepackage{xcolor}\n"
+    table += "% \\definecolor{ForestGreen}{RGB}{34,139,34}\n\n"
+    
+    table += "\\begin{table}[ht]\n"
     table += "\\centering\n"
-    table += "\\begin{tabular}{|l|c|c|c|c|c|c|}\n"
+    table += f"\\begin{{tabular}}{{{col_spec}}}\n"
     table += "\\hline\n"
-    table += "\\textbf{Split} & \\textbf{Baseline} & \\textbf{Final} & \\textbf{$\\Delta$ Recall} & "
-    table += "\\textbf{Baseline} & \\textbf{Final} & \\textbf{$\\Delta$ nDCG@10} \\\\\n"
-    table += " & \\textbf{R@100} & \\textbf{R@100} &  & \\textbf{nDCG@10} & \\textbf{nDCG@10} &  \\\\\n"
+    
+    # Header row 1
+    headers = []
+    if show_model:
+        headers.append("\\textbf{Model}")
+    if show_condition:
+        headers.append("\\textbf{Condition}")
+    headers.extend([
+        "\\textbf{Split}",
+        "\\textbf{Baseline}",
+        "\\textbf{Final}",
+        "\\textbf{$\\Delta$ Recall}",
+        "\\textbf{Baseline}",
+        "\\textbf{Final}",
+        "\\textbf{$\\Delta$ nDCG@10}"
+    ])
+    table += " & ".join(headers) + " \\\\\n"
+    
+    # Header row 2 (sub-headers for metrics)
+    subheaders = [""] * (len(headers) - 6)
+    subheaders.extend([
+        "\\textbf{R@100}",
+        "\\textbf{R@100}",
+        "",
+        "\\textbf{nDCG@10}",
+        "\\textbf{nDCG@10}",
+        ""
+    ])
+    table += " & ".join(subheaders) + " \\\\\n"
     table += "\\hline\n"
     
     for _, row in df.iterrows():
-        split_name = row['split'].replace('_', '\\_')
-        table += f"{split_name} "
-        table += f"& {row['baseline_recall_100']:.3f} "
-        table += f"& {row['final_recall_100']:.3f} "
-        table += f"& {format_delta(row['delta_recall_100'], 'latex')} "
-        table += f"& {row['baseline_ndcg_10']:.3f} "
-        table += f"& {row['final_ndcg_10']:.3f} "
-        table += f"& {format_delta(row['delta_ndcg_10'], 'latex')} \\\\\n"
+        cells = []
+        if show_model:
+            cells.append(f"\\textbf{{{row['model'].replace('/', '/')}}}")
+        if show_condition:
+            cells.append(row['condition'].replace('_', '\\_'))
+        cells.extend([
+            row['split'].replace('_', '\\_'),
+            f"{row['baseline_recall_100']:.3f}",
+            f"{row['final_recall_100']:.3f}",
+            format_delta(row['delta_recall_100'], 'latex'),
+            f"{row['baseline_ndcg_10']:.3f}",
+            f"{row['final_ndcg_10']:.3f}",
+            format_delta(row['delta_ndcg_10'], 'latex')
+        ])
+        table += " & ".join(cells) + " \\\\\n"
     
     table += "\\hline\n"
     table += "\\end{tabular}\n"
     table += f"\\caption{{{title}}}\n"
     table += f"\\label{{{label}}}\n"
-    table += "\\end{table}\n\n"
+    table += "\\end{table}\n"
     
     return table
 
-def generate_html_table(df: pd.DataFrame, title: str = "Results") -> str:
+def generate_html_table(df: pd.DataFrame, title: str = "Results", show_model: bool = True, show_condition: bool = True) -> str:
     """Generate an HTML table with colored deltas."""
-    # Sort by split name
-    df = df.sort_values('split')
+    # Sort by model, condition, then split
+    df = df.sort_values(['model', 'condition', 'split'])
     
     table = f"<h2>{title}</h2>\n"
     table += '<table border="1" style="border-collapse: collapse; margin: 20px 0;">\n'
     table += '  <thead>\n'
     table += '    <tr style="background-color: #f2f2f2;">\n'
+    
+    if show_model:
+        table += '      <th style="padding: 8px;">Model</th>\n'
+    if show_condition:
+        table += '      <th style="padding: 8px;">Condition</th>\n'
+    
     table += '      <th style="padding: 8px;">Split</th>\n'
     table += '      <th style="padding: 8px;">Baseline R@100</th>\n'
     table += '      <th style="padding: 8px;">Final R@100</th>\n'
@@ -207,6 +270,10 @@ def generate_html_table(df: pd.DataFrame, title: str = "Results") -> str:
     
     for _, row in df.iterrows():
         table += '    <tr>\n'
+        if show_model:
+            table += f'      <td style="padding: 8px;"><strong>{row["model"]}</strong></td>\n'
+        if show_condition:
+            table += f'      <td style="padding: 8px;">{row["condition"]}</td>\n'
         table += f'      <td style="padding: 8px;"><strong>{row["split"]}</strong></td>\n'
         table += f'      <td style="padding: 8px;">{row["baseline_recall_100"]:.3f}</td>\n'
         table += f'      <td style="padding: 8px;">{row["final_recall_100"]:.3f}</td>\n'
@@ -217,14 +284,9 @@ def generate_html_table(df: pd.DataFrame, title: str = "Results") -> str:
         table += '    </tr>\n'
     
     table += '  </tbody>\n'
-    table += '</table>\n\n'
+    table += '</table>\n'
     
     return table
-
-def save_csv(df: pd.DataFrame, output_path: Path):
-    """Save results as CSV."""
-    df.to_csv(output_path, index=False)
-    print(f"  ✓ Saved CSV: {output_path}")
 
 def sanitize_filename(name: str) -> str:
     """Convert model/condition names to valid filenames."""
@@ -235,6 +297,10 @@ def main():
     parser.add_argument('--format', type=str, default='all', 
                        choices=['markdown', 'latex', 'html', 'csv', 'all'],
                        help='Output format (default: all)')
+    parser.add_argument('--model', type=str, default=None,
+                       help='Filter by specific model (e.g., "openai/gpt4o")')
+    parser.add_argument('--condition', type=str, default=None,
+                       help='Filter by specific condition (e.g., "agent")')
     parser.add_argument('--output-dir', type=Path, default=Path('results_tables'),
                        help='Output directory for generated tables')
     parser.add_argument('--exclude-conditions', type=str, nargs='+', 
@@ -255,100 +321,70 @@ def main():
         print("Error: No results found!")
         return
     
-    # Get unique models and conditions
-    all_models = sorted(set(r.get('model', 'unknown') for r in results))
-    all_conditions = sorted(set(r.get('condition', 'unknown') for r in results 
-                                if r.get('condition') not in args.exclude_conditions))
+    # Aggregate data with filters
+    df = aggregate_by_split_and_condition(
+        results,
+        model_filter=args.model,
+        condition_filter=args.condition,
+        exclude_conditions=args.exclude_conditions
+    )
     
-    print(f"\nExcluding conditions: {args.exclude_conditions}")
-    print(f"\nProcessing:")
-    print(f"  Models: {all_models}")
-    print(f"  Conditions: {all_conditions}")
+    if df.empty:
+        print("Error: No data found with specified filters!")
+        return
     
-    # Generate tables for each (model, condition) combination
-    for model in all_models:
-        print(f"\n{'='*70}")
-        print(f"Model: {model}")
-        print(f"{'='*70}")
-        
-        for condition in all_conditions:
-            # Aggregate data for this model + condition
-            df = aggregate_by_split_and_condition(
-                results, 
-                model_filter=model, 
-                condition_filter=condition,
-                exclude_conditions=args.exclude_conditions
-            )
-            
-            if df.empty:
-                print(f"  ⊘ No data for {condition}")
-                continue
-            
-            # Build title and filenames
-            title = f"{model} - {condition}"
-            filename_base = f"{sanitize_filename(model)}_{condition}"
-            label = f"tab:{sanitize_filename(model)}_{condition}"
-            
-            print(f"\n  ✓ {condition}: {len(df)} split(s)")
-            
-            # Generate tables in requested formats
-            if args.format in ['markdown', 'all']:
-                md_table = generate_markdown_table(df, title)
-                output_file = args.output_dir / f"{filename_base}.md"
-                with open(output_file, 'w') as f:
-                    f.write(md_table)
-                print(f"    → {output_file}")
-            
-            if args.format in ['latex', 'all']:
-                latex_table = generate_latex_table(df, title, label)
-                output_file = args.output_dir / f"{filename_base}.tex"
-                with open(output_file, 'w') as f:
-                    f.write(latex_table)
-                print(f"    → {output_file}")
-            
-            if args.format in ['html', 'all']:
-                html_table = generate_html_table(df, title)
-                output_file = args.output_dir / f"{filename_base}.html"
-                with open(output_file, 'w') as f:
-                    f.write(html_table)
-                print(f"    → {output_file}")
-            
-            if args.format in ['csv', 'all']:
-                output_file = args.output_dir / f"{filename_base}.csv"
-                save_csv(df, output_file)
-                print(f"    → {output_file}")
+    # Determine what to show in columns
+    show_model = args.model is None and len(df['model'].unique()) > 1
+    show_condition = args.condition is None and len(df['condition'].unique()) > 1
     
-    # Also create a combined LaTeX file with all tables
+    # Build title and filename
+    title_parts = []
+    suffix_parts = []
+    
+    if args.model:
+        title_parts.append(args.model)
+        suffix_parts.append(sanitize_filename(args.model))
+    if args.condition:
+        title_parts.append(args.condition)
+        suffix_parts.append(args.condition)
+    
+    title = " - ".join(title_parts) if title_parts else "All Results"
+    suffix = "_" + "_".join(suffix_parts) if suffix_parts else ""
+    label = "tab:" + "_".join(suffix_parts) if suffix_parts else "tab:results"
+    
+    print(f"\n✓ Generating table: {title}")
+    print(f"  {len(df)} rows")
+    print(f"  {len(df['model'].unique())} model(s): {sorted(df['model'].unique())}")
+    print(f"  {len(df['condition'].unique())} condition(s): {sorted(df['condition'].unique())}")
+    print(f"  {len(df['split'].unique())} split(s): {sorted(df['split'].unique())}")
+    if args.exclude_conditions:
+        print(f"  Excluded: {args.exclude_conditions}")
+    
+    # Generate tables
+    if args.format in ['markdown', 'all']:
+        output_file = args.output_dir / f"results{suffix}.md"
+        with open(output_file, 'w') as f:
+            f.write(generate_markdown_table(df, title, show_model, show_condition))
+        print(f"\n✓ Saved Markdown: {output_file}")
+    
     if args.format in ['latex', 'all']:
-        print(f"\n{'='*70}")
-        print("Creating combined LaTeX file...")
-        combined_file = args.output_dir / "all_results_combined.tex"
-        with open(combined_file, 'w') as f:
-            f.write("% Required LaTeX packages:\n")
-            f.write("% \\usepackage{xcolor}\n")
-            f.write("% \\definecolor{ForestGreen}{RGB}{34,139,34}\n\n")
-            
-            for model in all_models:
-                for condition in all_conditions:
-                    df = aggregate_by_split_and_condition(
-                        results, 
-                        model_filter=model, 
-                        condition_filter=condition,
-                        exclude_conditions=args.exclude_conditions
-                    )
-                    if not df.empty:
-                        title = f"{model} - {condition}"
-                        label = f"tab:{sanitize_filename(model)}_{condition}"
-                        table = generate_latex_table(df, title, label)
-                        # Remove the package comments from individual tables
-                        table = table.split('\n\n', 1)[-1]
-                        f.write(table + "\n")
-        
-        print(f"✓ Combined file: {combined_file}")
+        output_file = args.output_dir / f"results{suffix}.tex"
+        with open(output_file, 'w') as f:
+            f.write(generate_latex_table(df, title, label, show_model, show_condition))
+        print(f"✓ Saved LaTeX: {output_file}")
     
-    print(f"\n{'='*70}")
-    print(f"✅ Done! All tables saved to: {args.output_dir}/")
-    print(f"{'='*70}\n")
+    if args.format in ['html', 'all']:
+        output_file = args.output_dir / f"results{suffix}.html"
+        with open(output_file, 'w') as f:
+            f.write(generate_html_table(df, title, show_model, show_condition))
+        print(f"✓ Saved HTML: {output_file}")
+    
+    if args.format in ['csv', 'all']:
+        output_file = args.output_dir / f"results{suffix}.csv"
+        df.to_csv(output_file, index=False)
+        print(f"✓ Saved CSV: {output_file}")
+    
+    print(f"\n✅ Done! Tables saved to: {args.output_dir}/")
 
 if __name__ == "__main__":
     main()
