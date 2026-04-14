@@ -1,38 +1,50 @@
 #!/usr/bin/env bash
-# run_experiments.sh — Run all ablation conditions from a clean baseline each time.
-#
-# Usage:
-#   bash run_experiments.sh                                          # default (GPT-4o via UMass proxy)
-#   bash run_experiments.sh --model gemini/gemini-2.5-pro           # Gemini 2.5 Pro (native API, needs GEMINI_API_KEY)
-#   bash run_experiments.sh --model openai/gpt4o --api-base https://thekeymaker.umass.edu/
-#
-# Results are written to results/{condition}_{timestamp}.json
-
 set -euo pipefail
 
-SPLIT="${1:-tip_of_the_tongue_5000docs}"
+show_help() {
+    cat <<EOF
+Usage: $0 [--split NAME] [--max-distractors N] [--model MODEL] [--api-base URL]
 
-BASELINE_PREPROCESS="src/agents/baseline/preprocess.py"
-AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
+--split            Split name (default: tip_of_the_tongue)
+--max-distractors  Max non-relevant docs to sample (default: 9000)
+--model            Model identifier (e.g., openai/gpt4o)
+--api-base         API base URL
+EOF
+}
 
-# Parse optional --model and --api-base flags
-MODEL_ARGS=""
+# defaults
+SPLIT="tip_of_the_tongue"
+MAX_DISTRACTORS="9000"
+MODEL_ARGS_ARRAY=()
+
+# parse args
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --split)
+            SPLIT="$2"; shift 2
+            ;;
+        --max-distractors)
+            MAX_DISTRACTORS="$2"; shift 2
+            ;;
         --model)
-            MODEL_ARGS="$MODEL_ARGS --model $2"
-            shift 2
+            MODEL_ARGS_ARRAY+=("--model" "$2"); shift 2
             ;;
         --api-base)
-            MODEL_ARGS="$MODEL_ARGS --api-base $2"
-            shift 2
+            MODEL_ARGS_ARRAY+=("--api-base" "$2"); shift 2
+            ;;
+        --help|-h)
+            show_help; exit 0
             ;;
         *)
             echo "Unknown argument: $1"
+            show_help
             exit 1
             ;;
     esac
 done
+
+BASELINE_PREPROCESS="src/agents/baseline/preprocess.py"
+AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
 
 cleanup_port() {
     local port=8765
@@ -52,18 +64,19 @@ reset_preprocess() {
 }
 
 run_experiment() {
-    local label="$1"
-    shift
+    local label="$1"; shift
+    local extra_args=("$@")
     echo ""
     echo "=============================================="
     echo "  RUNNING: $label"
     echo "=============================================="
     cleanup_port
     reset_preprocess
-    uv run python main.py "$@" $MODEL_ARGS
+
+    uv run python main.py "${extra_args[@]}" --split "$SPLIT" --max-distractors "$MAX_DISTRACTORS" "${MODEL_ARGS_ARRAY[@]}"
+
     echo ">>> Done: $label"
 
-    # Generate plots for this experiment (ok if it fails)
     LATEST_DIR=$(ls -td ablation_experiments/*_${label}_* 2>/dev/null | head -1)
     if [ -n "$LATEST_DIR" ]; then
         echo ">>> Generating plots for $LATEST_DIR ..."
@@ -71,33 +84,16 @@ run_experiment() {
     fi
 }
 
-# 1. One-shot (single LLM call, no loop)
-run_experiment "one_shot" \
-    --agent one_shot --split "$SPLIT"
-
-# 2. Agent — no history, no contrastive
-run_experiment "agent" \
-    --agent analysis_code_agent --loops 3 --condition agent --split "$SPLIT"
-
-# 3. Agent + History
-run_experiment "agent_history" \
-    --agent analysis_code_agent --loops 3 --condition agent_history --split "$SPLIT"
-
-# 4. Agent + Contrastive (no history)
-run_experiment "agent_contrastive_no_history" \
-    --agent analysis_code_agent --loops 3 --condition agent_contrastive_no_history --split "$SPLIT"
-
-# 5. Agent + History + Contrastive (3 loops)
-run_experiment "agent_contrastive" \
-    --agent analysis_code_agent --loops 3 --condition agent_contrastive --split "$SPLIT"
-
-# 6. Agent + History + Contrastive (7 loops)
-run_experiment "agent_contrastive_7loops" \
-    --agent analysis_code_agent --loops 7 --condition agent_contrastive --split "$SPLIT"
+# Experiments
+run_experiment "one_shot" --agent one_shot
+run_experiment "agent" --agent analysis_code_agent --loops 3 --condition agent
+run_experiment "agent_history" --agent analysis_code_agent --loops 3 --condition agent_history
+run_experiment "agent_contrastive_no_history" --agent analysis_code_agent --loops 3 --condition agent_contrastive_no_history
+run_experiment "agent_contrastive" --agent analysis_code_agent --loops 3 --condition agent_contrastive
+run_experiment "agent_contrastive_7loops" --agent analysis_code_agent --loops 7 --condition agent_contrastive
 
 echo ""
 echo "=============================================="
 echo "  ALL EXPERIMENTS COMPLETE"
-echo "  Results in: results/"
 echo "=============================================="
 ls -lt results/**/*.json results/*.json 2>/dev/null | head -15

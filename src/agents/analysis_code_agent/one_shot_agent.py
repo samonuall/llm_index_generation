@@ -23,7 +23,7 @@ load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
 
 
-def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api_base: str | None = None) -> None:
+def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api_base: str | None = None, max_distractors: int = 9000) -> None:
     """Run the one-shot baseline: one LLM call → eval → save results."""
 
     config_path = _AGENT_DIR / "config.yaml"
@@ -43,7 +43,8 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     else:
         api_base = config.get("api_base")
     temperature = config.get("code_temperature", 1.0)
-    max_distractors = config.get("max_distractors", 9000)
+    if max_distractors == 9000:  # default value, check config
+        max_distractors = config.get("max_distractors", 9000)
 
     # --- Load data ---
     import subprocess, atexit, sys
