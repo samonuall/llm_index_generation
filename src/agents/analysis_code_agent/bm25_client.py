@@ -25,8 +25,12 @@ def _with_retry(max_attempts: int = 3, backoff: float = 2.0):
                     return func(*args, **kwargs)
                 except (httpx.RequestError, httpx.TimeoutException) as e:
                     last_exc = e
-                    if attempt < max_attempts - 1:
-                        time.sleep(backoff * (2 ** attempt))
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code < 500:
+                        raise  # 4xx: client error, retrying won't help
+                    last_exc = e
+                if attempt < max_attempts - 1:
+                    time.sleep(backoff * (2 ** attempt))
             raise last_exc
 
         return wrapper

@@ -29,6 +29,7 @@ _indexes: dict[str, dict] = {}
 
 # Staging area for batched index builds
 _staging: dict[str, list[dict]] = {}
+_staging_ids: dict[str, set[str]] = {}  # seen chunk_ids per buffer — deduplicates retried appends
 
 _persist_dir: pathlib.Path | None = None
 
@@ -188,11 +189,20 @@ def batch_retrieve(name: str, req: BatchRetrieveRequest):
 
 @app.post("/index/{name}/append")
 def append_chunks(name: str, req: AppendChunksRequest):
-    """Append chunks to a staging buffer for batched index building."""
+    """Append chunks to a staging buffer for batched index building.
+
+    Idempotent: duplicate chunk_ids (e.g. from a retried request) are silently skipped.
+    """
     if name not in _staging:
         _staging[name] = []
-    _staging[name].extend(c.model_dump() for c in req.chunks)
-    return {"status": "appended", "n_staged": len(_staging[name])}
+        _staging_ids[name] = set()
+    new_chunks = [
+        c.model_dump() for c in req.chunks
+        if c.chunk_id not in _staging_ids[name]
+    ]
+    _staging_ids[name].update(c["chunk_id"] for c in new_chunks)
+    _staging[name].extend(new_chunks)
+    return {"status": "appended", "n_staged": len(_staging[name]), "n_skipped": len(req.chunks) - len(new_chunks)}
 
 
 @app.post("/index/{name}/finalize")
@@ -202,6 +212,7 @@ def finalize_index(name: str, req: FinalizeRequest):
         raise HTTPException(400, f"No staged chunks for index '{name}'")
 
     chunk_dicts = _staging.pop(name)
+    _staging_ids.pop(name, None)
     texts = [c["text"] for c in chunk_dicts]
 
     retriever = _build_bm25(texts)
