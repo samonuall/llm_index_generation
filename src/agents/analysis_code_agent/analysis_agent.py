@@ -61,6 +61,7 @@ class AnalysisAgent:
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
         self._min_tool_turns = config.get("min_tool_turns", 3)
+        self._use_tools = config.get("use_tools", True)
         self._bash_timeout = config.get("bash_timeout_seconds", 30)
         self._llm_timeout = config.get("analysis_llm_timeout", None)
         # Only pass api_key explicitly for proxy; native providers read key from env.
@@ -106,7 +107,7 @@ class AnalysisAgent:
         summary_text = None
 
         for turn in range(self._max_turns):
-            msg = self._call_llm(messages, turn, tools=TOOL_SCHEMAS)
+            msg = self._call_llm(messages, turn, tools=TOOL_SCHEMAS if self._use_tools else None)
             if msg is None:
                 break
 
@@ -158,8 +159,8 @@ class AnalysisAgent:
                 summary_text = match.group(1).strip()
                 break
 
-            # No summary tag — nudge if not enough tool turns
-            if tool_turns < self._min_tool_turns:
+            # No summary tag — nudge if not enough tool turns (only when tools are enabled)
+            if self._use_tools and tool_turns < self._min_tool_turns:
                 nudge = (
                     f"You have only completed {tool_turns}/{self._min_tool_turns} tool-using turns. "
                     f"Please investigate more failing queries using the available tools "
@@ -168,7 +169,7 @@ class AnalysisAgent:
                 messages.append({"role": "user", "content": nudge})
                 continue
 
-            # Enough tool turns, no summary tag, no tool calls — exit
+            # No summary tag, no tool calls — exit
             break
 
         # If no summary found in loop, check all assistant messages for <summary>

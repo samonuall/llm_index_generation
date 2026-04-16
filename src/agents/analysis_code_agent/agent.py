@@ -79,12 +79,23 @@ def _load_config(overrides: dict | None = None) -> dict:
     return config
 
 
+def _doc_to_dict(doc) -> dict:
+    return {"doc_id": doc.doc_id, "text": doc.text, "metadata": doc.metadata}
+
+
+def _dict_to_doc(d, Document):
+    return Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
+
+
 def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None, seed: int = 42):
     """Load queries and corpus from data/.
 
     If corpus_size is None, loads every document. Otherwise uses reservoir sampling
     to select corpus_size documents, always retaining every gold doc (any doc
     referenced by at least one query's relevant_doc_ids).
+
+    Gold docs and distractor samples are cached in data/<split>/gold_docs_cache.json
+    so that repeat runs with the same seed/corpus_size skip the full corpus scan.
     """
     from schema import Document, EvalQuery
 
@@ -114,12 +125,28 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
         print(f"[data] Corpus: {len(docs)} docs total, {len(queries)} queries")
         return docs, queries
 
-    # Reservoir sampling: gold docs always included, non-gold sampled via Algorithm R
+    # Try loading from cache (gold docs + distractor sample for this seed/corpus_size).
+    cache_path = data_dir / "gold_docs_cache.json"
+    sample_key = f"seed_{seed}_size_{corpus_size}"
+    cache: dict = {}
+    if cache_path.exists():
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+
+    if "gold_docs" in cache and sample_key in cache.get("distractor_samples", {}):
+        gold_docs = [_dict_to_doc(d, Document) for d in cache["gold_docs"]]
+        reservoir = [_dict_to_doc(d, Document) for d in cache["distractor_samples"][sample_key]]
+        print(
+            f"[data] Corpus loaded from cache: {len(gold_docs) + len(reservoir)} docs "
+            f"({len(gold_docs)} gold + {len(reservoir)} non-gold), {len(queries)} queries"
+        )
+        return gold_docs + reservoir, queries
+
+    # Cache miss — stream corpus, run reservoir sampling, then write cache.
     gold_doc_ids = {doc_id for q in queries for doc_id in q.relevant_doc_ids}
     target_non_gold = max(0, corpus_size - len(gold_doc_ids))
 
-    gold_docs: list[Document] = []
-    reservoir: list[Document] = []
+    gold_docs = []
+    reservoir = []
     rng = random.Random(seed)
     n_non_gold_seen = 0
 
@@ -138,13 +165,16 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
                         reservoir[j] = doc
                 n_non_gold_seen += 1
 
-    docs = gold_docs + reservoir
+    # Write / update cache
+    cache["gold_docs"] = [_doc_to_dict(d) for d in gold_docs]
+    cache.setdefault("distractor_samples", {})[sample_key] = [_doc_to_dict(d) for d in reservoir]
+    cache_path.write_text(json.dumps(cache), encoding="utf-8")
     print(
-        f"[data] Corpus: {len(docs)} docs sampled "
+        f"[data] Corpus: {len(gold_docs) + len(reservoir)} docs sampled "
         f"({len(gold_docs)} gold + {len(reservoir)} non-gold of {n_non_gold_seen} seen), "
-        f"{len(queries)} queries"
+        f"{len(queries)} queries — cache written to {cache_path}"
     )
-    return docs, queries
+    return gold_docs + reservoir, queries
 
 
 class AnalysisCodeAgent(AgentRunner):
