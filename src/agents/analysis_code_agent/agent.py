@@ -98,6 +98,7 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
       - gold_docs_cache.json          — full gold doc content; shared across all seeds/sizes
       - distractors_seed{s}_size{n}.json — sampled non-gold docs for a specific (seed, corpus_size)
     """
+    import random
     from schema import Document, EvalQuery
 
     data_dir = _PROJECT_ROOT / "data" / split

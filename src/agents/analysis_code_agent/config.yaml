@@ -14,6 +14,7 @@ corpus_size: 5000                # null = full corpus; set to integer (e.g. 5000
                                  # gold docs (referenced by any query) are always included; remainder is sampled randomly
 
 max_hypotheses: 4
+max_distractors: 9000     # relevant docs + this many distractors = ~10K corpus; remove to use full corpus
 recall_improvement_threshold: 0.00001
 analysis_max_turns: 4
 min_tool_turns: 3

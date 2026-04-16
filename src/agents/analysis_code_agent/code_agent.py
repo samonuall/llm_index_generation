@@ -141,13 +141,10 @@ class CodeAgent:
                     "mechanically different — not a renaming or minor tweak of what was tried.\n"
                 )
 
-            past_descriptions = [ph["description"] for ph in past_hypotheses]
             diversity_instruction = (
                 "\n## Diversity Requirement\n"
-                "The approaches already tried are listed above. Each new hypothesis MUST be "
-                "mechanically different from all of them — different *operation* on the text, "
-                "not just a different parameter or a renaming.\n"
-                f"Already tried: {'; '.join(past_descriptions)}\n"
+                "The approaches already tried are listed above. "
+                "Each new hypothesis must be different from all of them.\n"
             )
 
             past_section = (
@@ -193,7 +190,6 @@ IMPORTANT NOTES:
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
 ### H1: <description>
-Mechanism: <your own short label for the core operation, e.g. TITLE-INJECTION>
 Rationale: <rationale>
 Query IDs: <comma-separated query_ids>
 Falsifying: <condition>
@@ -201,7 +197,7 @@ Falsifying: <condition>
 <complete preprocess.py code>
 ```
 
-Repeat for H2, H3, H4. Each must have a DIFFERENT Mechanism label.
+Repeat for H2, H3, H4.
 
 The code MUST start with the standard imports:
 ```python
