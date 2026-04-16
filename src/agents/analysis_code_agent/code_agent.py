@@ -3,6 +3,7 @@ code_agent.py - Hypothesis generation, testing, and final code synthesis.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import json
@@ -17,6 +18,8 @@ from .llm_call import completion
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
+
+logger = logging.getLogger("analysis_code_agent")
 
 
 @dataclass
@@ -231,6 +234,7 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
             text = response.choices[0].message.content or ""
             self._log_call("generate_hypotheses", messages, text)
         except Exception as e:
+            logger.exception("Hypothesis generation LLM call failed (model=%s)", self._model)
             print(f"[code_agent] Hypothesis generation failed: {e}")
             return []
 
@@ -272,9 +276,14 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 if raw is None:
                     raw = self._parse_hypotheses_json(text2)
             except Exception as e:
+                logger.exception("Hypothesis generation retry failed")
                 print(f"[code_agent] Retry failed: {e}")
 
         if not raw:
+            logger.warning(
+                "Failed to parse hypotheses. Raw model output:\n%s",
+                locals().get("text2", text),
+            )
             print("[code_agent] No hypotheses parsed. Returning empty.")
             return []
 
@@ -472,6 +481,7 @@ Repeat for H2, H3, H4.
             text = response.choices[0].message.content or ""
             self._log_call("generate_ideas", messages, text)
         except Exception as e:
+            logger.exception("Idea generation LLM call failed (model=%s)", self._model)
             print(f"[code_agent] Idea generation failed: {e}")
             return []
 
@@ -547,6 +557,7 @@ from base import BasePreprocessor
         # Extract code block
         code_match = re.search(r"```python\s*\n(.*?)```", text, re.DOTALL)
         if not code_match:
+            logger.warning("No code block found for %s. Raw response:\n%s", idea.get("id"), text)
             print(f"[code_agent] No code block found for {idea['id']}")
             return None
 
@@ -571,6 +582,7 @@ from base import BasePreprocessor
             raw_text = match.group(1) if "<hypotheses>" in match.group(0) else match.group(0)
             return json.loads(raw_text)
         except json.JSONDecodeError as e:
+            logger.warning("Hypothesis JSON parse failed: %s. Raw:\n%s", e, raw_text if 'raw_text' in locals() else match.group(0))
             print(f"[code_agent] JSON parse error: {e}")
             return None
 
@@ -653,6 +665,8 @@ from base import BasePreprocessor
                     )
             return None
         except Exception as e:
+            logger.exception("Validation of generated code raised")
+            logger.debug("Offending code:\n%s", code)
             return str(e)
 
     def test_hypothesis(
@@ -674,10 +688,15 @@ from base import BasePreprocessor
         if validation_error:
             result.error = f"Validation failed: {validation_error}"
             result.notes = f"Code rejected at validation: {validation_error[:120]}"
+            logger.error(
+                "Hypothesis %s validation failed: %s",
+                hypothesis.id, validation_error,
+            )
+            logger.debug("Hypothesis %s code:\n%s", hypothesis.id, hypothesis.code)
             print(f"[code_agent] {hypothesis.id} validation error: {validation_error[:120]}")
             return result
 
-        preprocess_timeout = 600  # seconds — full corpus can be 200K+ docs
+        preprocess_timeout = 1200  # seconds — full corpus can be 200K+ docs
 
         try:
             # Always test on all queries for reliable delta measurement.
@@ -745,6 +764,10 @@ from base import BasePreprocessor
             )
 
         except Exception as e:
+            logger.exception(
+                "test_hypothesis failed for %s (desc=%r, targeted_queries=%s)",
+                hypothesis.id, hypothesis.description, hypothesis.query_ids_to_test,
+            )
             result.error = str(e)
             result.notes = f"Error: {e}"
             print(f"[code_agent] {hypothesis.id} error: {e}")
@@ -754,7 +777,7 @@ from base import BasePreprocessor
             try:
                 client.delete_index(index_name)
             except Exception:
-                pass
+                logger.debug("delete_index(%s) failed during cleanup", index_name, exc_info=True)
 
         return result
 

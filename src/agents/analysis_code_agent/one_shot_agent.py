@@ -8,6 +8,7 @@ No iterative loop, no bash investigation, no hypothesis history.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import pathlib
@@ -21,6 +22,8 @@ from .llm_call import completion
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
+
+logger = logging.getLogger("analysis_code_agent")
 
 
 def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api_base: str | None = None) -> None:
@@ -53,6 +56,15 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     _EVAL_DIR = _PROJECT_ROOT / "src" / "evaluation"
     if str(_EVAL_DIR) not in sys.path:
         sys.path.insert(0, str(_EVAL_DIR))
+
+    # --- Create experiment dir + debug log up front so errors are captured ---
+    from .agent import _setup_debug_logger
+    model_short_early = model.replace("/", "_")
+    exp_timestamp_early = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_dir_early = _PROJECT_ROOT / "ablation_experiments" / f"{model_short_early}_one_shot_{exp_timestamp_early}"
+    experiment_dir_early.mkdir(parents=True, exist_ok=True)
+    _setup_debug_logger(experiment_dir_early)
+    logger.info("one_shot run start: model=%s split=%s", model, split)
 
     print("[one_shot] Loading data ...")
     documents, queries = _load_data(split)
@@ -89,6 +101,7 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
         baseline_eval = run_subset_eval("one_shot_baseline", queries, client, top_k=100)
         miss_ids = [r.query_id for r in baseline_eval.per_query if not r.hit_at_100][:30]
     except Exception as e:
+        logger.exception("one_shot baseline eval failed")
         print(f"[one_shot] Baseline eval failed: {e} — using empty miss list.")
         miss_ids = []
 
@@ -153,6 +166,7 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
         tracker.record_llm_call(response, time.time() - t0, agent="one_shot")
         text = response.choices[0].message.content or ""
     except Exception as e:
+        logger.exception("one_shot LLM call failed (model=%s)", model)
         print(f"[one_shot] LLM call failed: {e}")
         server_proc.terminate()
         return
@@ -160,6 +174,7 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
     # --- Extract and write code ---
     match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
     if not match:
+        logger.warning("one_shot: No python block in response. Raw text:\n%s", text)
         print("[one_shot] No python block found in response.")
         server_proc.terminate()
         return
@@ -190,6 +205,7 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
             f"({summary.recall_at_100 - baseline_recall:+.4f})"
         )
     except Exception as e:
+        logger.exception("one_shot eval failed")
         print(f"[one_shot] Eval failed: {e}")
 
     server_proc.terminate()
@@ -220,10 +236,8 @@ The file must define `class Preprocessor(BasePreprocessor)` with a `preprocess(s
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"[one_shot] Results saved → {out_path}")
 
-    # --- Save to experiment directory ---
-    model_short = model.replace("/", "_")
-    experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"{model_short}_one_shot_{timestamp}"
-    experiment_dir.mkdir(parents=True, exist_ok=True)
+    # --- Save to experiment directory (created early so debug.log is already there) ---
+    experiment_dir = experiment_dir_early
     (experiment_dir / "results.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (experiment_dir / "preprocess.py").write_text(code + "\n", encoding="utf-8")
     print(f"[one_shot] Experiment logs → {experiment_dir}")

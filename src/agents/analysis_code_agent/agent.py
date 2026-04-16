@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
+import logging
 
 import subprocess
 import sys
@@ -36,6 +37,36 @@ from .code_agent import CodeAgent
 from .bm25_client import BM25Client
 from .run_journal import RunJournal
 from .run_tracker import RunTracker
+
+
+_DEBUG_LOGGER_NAME = "analysis_code_agent"
+logger = logging.getLogger(_DEBUG_LOGGER_NAME)
+
+
+def _setup_debug_logger(experiment_dir: pathlib.Path) -> logging.Logger:
+    """Configure a DEBUG-level FileHandler at {experiment_dir}/debug.log.
+
+    Idempotent: safe to call multiple times per process (clears previous
+    per-run handlers so each run writes to its own experiment directory).
+    """
+    log = logging.getLogger(_DEBUG_LOGGER_NAME)
+    log.setLevel(logging.DEBUG)
+    log.propagate = False
+    for h in list(log.handlers):
+        log.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
+    fh = logging.FileHandler(experiment_dir / "debug.log", mode="w", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    log.addHandler(fh)
+    log.info("Debug log initialized at %s", experiment_dir / "debug.log")
+    return log
 
 
 def _load_config(overrides: dict | None = None) -> dict:
@@ -450,7 +481,14 @@ class AnalysisCodeAgent(AgentRunner):
         exp_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self._experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"{model_name}_{self.condition}_{exp_timestamp}"
         self._experiment_dir.mkdir(parents=True, exist_ok=True)
+        _setup_debug_logger(self._experiment_dir)
         print(f"[agent] Experiment logs → {self._experiment_dir}")
+        logger.info(
+            "Run start: model=%s condition=%s split=%s loops=%d baseline_recall@100=%.4f baseline_ndcg@10=%.4f",
+            model_name, self.condition, self.split, n_loops,
+            baseline_results.get("recall_at_k", 0.0),
+            baseline_results.get("ndcg", 0.0),
+        )
 
         # Create tracker + sub-agents + journal
         tracker = RunTracker()
@@ -468,6 +506,7 @@ class AnalysisCodeAgent(AgentRunner):
             print(f"\n{'#'*60}")
             print(f"# Loop {i + 1} / {n_loops}")
             print(f"{'#'*60}")
+            logger.info("=== Loop %d/%d start ===", i + 1, n_loops)
 
             # Full harness eval — authoritative recall@100 for this loop's starting point
             try:
@@ -475,9 +514,8 @@ class AnalysisCodeAgent(AgentRunner):
                 eval_log = self._experiment_dir / f"iteration_{i}_eval.json"
                 eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
             except Exception as e:
+                logger.exception("Eval failed on loop %d", i + 1)
                 print(f"[agent] Eval failed (loop {i + 1}): {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
             # Anchor: harness recall@100 at the start of this loop
@@ -494,6 +532,7 @@ class AnalysisCodeAgent(AgentRunner):
                 self._client.build_index("current", chunks, persist=False)
                 print(f"[agent] 'current' index built with {len(chunks)} chunks.")
             except Exception as e:
+                logger.exception("Index build failed on loop %d", i + 1)
                 print(f"[agent] Index build failed: {e}")
                 continue
 
@@ -503,9 +542,8 @@ class AnalysisCodeAgent(AgentRunner):
                 raw_results = self._enrich_eval_results(raw_results, queries, self._client)
                 print(f"[agent] Enriched with {len(raw_results.get('query_results', []))} query results.")
             except Exception as e:
+                logger.exception("Enrichment failed on loop %d", i + 1)
                 print(f"[agent] Enrichment failed: {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
             # Record iteration in journal
@@ -524,9 +562,8 @@ class AnalysisCodeAgent(AgentRunner):
                 )
                 self._log_analysis(i, analysis_result)
             except Exception as e:
+                logger.exception("Analysis agent failed on loop %d", i + 1)
                 print(f"[agent] Analysis failed: {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
             # Hypothesis generation
@@ -627,6 +664,8 @@ class AnalysisCodeAgent(AgentRunner):
                         # Validate and quick-test the synthesized code
                         val_err = code_agent._validate_code(synthesized, documents)
                         if val_err:
+                            logger.error("Synthesis validation failed on loop %d:\n%s", i, val_err)
+                            logger.debug("Synthesized code that failed validation:\n%s", synthesized)
                             print(f"[agent] Synthesis validation failed: {val_err[:80]} — falling back to best hypothesis.")
                             final_code = best_hyp.hypothesis.code
                         else:
@@ -653,6 +692,7 @@ class AnalysisCodeAgent(AgentRunner):
                         print(f"[agent] Synthesized recall@100={candidate_recall_100:.4f} "
                               f"(global best so far: {best_recall_100:.4f})")
                     except Exception as e:
+                        logger.exception("Harness eval of synthesized code failed on loop %d", i)
                         print(f"[agent] Harness eval of synthesized code failed: {e} — reverting to pre-loop code.")
                         self._write_preprocess(current_code)
                         continue
@@ -692,6 +732,11 @@ class AnalysisCodeAgent(AgentRunner):
                     print(f"[agent] Global best updated → recall@100={best_recall_100:.4f}")
                 else:
                     print(f"[agent] Candidate did not beat global best — preprocess.py unchanged.")
+                logger.info(
+                    "Loop %d end: adopted=%s synthesized=%s candidate_recall@100=%.4f best=%.4f",
+                    i + 1, best_hyp.hypothesis.id, was_synthesized,
+                    candidate_recall_100, best_recall_100,
+                )
             else:
                 # No hypothesis improved — write accepted JSON indicating no adoption
                 accepted_data = {
@@ -702,6 +747,7 @@ class AnalysisCodeAgent(AgentRunner):
                 accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
                 accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
                 print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
+                logger.info("Loop %d end: no adoption (best=%.4f)", i + 1, best_recall_100)
 
         # Final eval
         print(f"\n{'#'*60}")
@@ -715,6 +761,7 @@ class AnalysisCodeAgent(AgentRunner):
             print(f"\n[agent] Improvement: recall@100 {baseline_recall:.4f} → {final_recall:.4f} "
                   f"({final_recall - baseline_recall:+.4f})")
         except Exception as e:
+            logger.exception("Final eval failed")
             print(f"[agent] Final eval failed: {e}")
 
         # Write results JSON

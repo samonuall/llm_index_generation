@@ -7,6 +7,7 @@ BM25 retrieval failures and produce a structured analysis summary.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import pathlib
@@ -19,6 +20,8 @@ from .llm_call import completion
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
+
+logger = logging.getLogger("analysis_code_agent")
 
 import re as _re
 import sys as _sys
@@ -127,8 +130,23 @@ class AnalysisAgent:
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to parse tool args as JSON for %s. Raw: %r",
+                            tc.function.name, tc.function.arguments,
+                        )
                         args = {}
-                    result = dispatch_tool(tc.function.name, args, client=client, split=split)
+                    try:
+                        result = dispatch_tool(tc.function.name, args, client=client, split=split)
+                        logger.debug(
+                            "Tool call %s(%s) → %d chars",
+                            tc.function.name, args, len(str(result)),
+                        )
+                    except Exception as e:
+                        logger.exception(
+                            "Tool call %s(%s) raised",
+                            tc.function.name, args,
+                        )
+                        result = f"[tool error] {type(e).__name__}: {e}"
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                 tool_turns += 1
                 continue
@@ -194,24 +212,23 @@ class AnalysisAgent:
         try:
             return _do_call(messages)
         except Exception as e:
-            import traceback
+            logger.exception("Analysis LLM call failed on turn %d", turn)
             print(f"[analysis_agent] LLM call failed (turn {turn}): {type(e).__name__}: {e}")
-            traceback.print_exc()
             if "ContentPolicyViolation" in type(e).__name__ or "content_policy" in str(e).lower() or "content management policy" in str(e).lower():
                 sanitized = self._sanitize_messages(messages)
                 messages[:] = sanitized
                 try:
                     return _do_call(sanitized)
                 except Exception as e2:
+                    logger.exception("Analysis LLM retry (sanitized) failed on turn %d", turn)
                     print(f"[analysis_agent] LLM retry (sanitized) failed: {type(e2).__name__}: {e2}")
-                    traceback.print_exc()
                     return None
             time.sleep(5)
             try:
                 return _do_call(messages)
             except Exception as e2:
+                logger.exception("Analysis LLM retry failed on turn %d", turn)
                 print(f"[analysis_agent] LLM retry failed: {type(e2).__name__}: {e2}")
-                traceback.print_exc()
                 return None
 
     def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
@@ -312,9 +329,8 @@ class AnalysisAgent:
 
             return summary
         except Exception as e:
-            import traceback
+            logger.exception("Summary request failed")
             print(f"[analysis_agent] _request_summary failed: {type(e).__name__}: {e}")
-            traceback.print_exc()
             return "Analysis failed to produce summary."
 
     def _build_candidates(self, eval_results: dict, baseline_results: dict) -> dict:
