@@ -696,7 +696,7 @@ from base import BasePreprocessor
             print(f"[code_agent] {hypothesis.id} validation error: {validation_error[:120]}")
             return result
 
-        preprocess_timeout = 1200  # seconds — full corpus can be 200K+ docs
+        preprocess_timeout = self._config.get("preprocess_timeout_seconds", 120)
 
         try:
             # Always test on all queries for reliable delta measurement.

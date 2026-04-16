@@ -218,8 +218,8 @@ class AnalysisCodeAgent(AgentRunner):
         )
         atexit.register(self._kill_server)
 
-        # Wait for server to be ready (up to 300s — large persisted indexes take time)
-        max_wait = 300
+        # Wait for server to be ready; configurable so small-corpus runs aren't penalised
+        max_wait = self._config.get("server_startup_timeout", 30)
         for i in range(max_wait * 2):
             time.sleep(0.5)
             if self._client.health():

@@ -6,6 +6,8 @@ api_base: "https://thekeymaker.umass.edu/"
 
 server_port: 8765
 server_persist_dir: ".bm25_cache"
+server_startup_timeout: 30       # seconds to wait for BM25 server to be ready; increase to 300 for large persisted indexes
+preprocess_timeout_seconds: 120  # seconds allowed for preprocess() per hypothesis; increase to 1200 for 200K+ doc corpora
 
 max_hypotheses: 4
 recall_improvement_threshold: 0.00001
