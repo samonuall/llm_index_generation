@@ -493,6 +493,10 @@ Repeat for H2, H3, H4.
             print("[code_agent] No ideas parsed from Phase 1 response.")
             return []
 
+        for i, idea in enumerate(raw):
+            if "id" not in idea:
+                idea["id"] = f"H{i + 1}"
+
         return raw[:n]
 
     async def _generate_code_for_idea(
