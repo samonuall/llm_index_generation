@@ -1,6 +1,6 @@
-analysis_model: "openai/gemma-3-4b-it"
+analysis_model: "openai/claude-haiku-4-5"
 analysis_temperature: 0.6
-code_model: "openai/gemma-3-4b-it"
+code_model: "openai/claude-haiku-4-5"
 code_temperature: 1.0
 api_base: "https://thekeymaker.umass.edu/"
 
@@ -15,6 +15,6 @@ corpus_size: 5000                # null = full corpus; set to integer (e.g. 5000
 
 max_hypotheses: 4
 recall_improvement_threshold: 0.00001
-analysis_max_turns: 8
+analysis_max_turns: 4
 min_tool_turns: 3
-use_tools: false                  # set to false for models that don't support tool-calling (e.g. gemma)
+use_tools: true                  # set to false for models that don't support tool-calling (e.g. gemma)
