@@ -12,6 +12,7 @@ import asyncio
 import atexit
 import json
 import logging
+import random
 
 import subprocess
 import sys
@@ -78,10 +79,12 @@ def _load_config(overrides: dict | None = None) -> dict:
     return config
 
 
-def _load_data(split: str = "tip_of_the_tongue"):
-    """Load all queries and the full corpus from data/.
+def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None, seed: int = 42):
+    """Load queries and corpus from data/.
 
-    Loads every document in documents.jsonl — no sampling or distractor limits.
+    If corpus_size is None, loads every document. Otherwise uses reservoir sampling
+    to select corpus_size documents, always retaining every gold doc (any doc
+    referenced by at least one query's relevant_doc_ids).
     """
     from schema import Document, EvalQuery
 
@@ -89,7 +92,6 @@ def _load_data(split: str = "tip_of_the_tongue"):
     if not data_dir.exists():
         data_dir = _PROJECT_ROOT / "data"
 
-    # Load queries
     queries = []
     queries_path = data_dir / "queries.jsonl"
     with queries_path.open(encoding="utf-8") as f:
@@ -101,15 +103,47 @@ def _load_data(split: str = "tip_of_the_tongue"):
                 relevant_doc_ids=q["relevant_doc_ids"],
             ))
 
-    # Load all documents
-    docs: list[Document] = []
     docs_path = data_dir / "documents.jsonl"
+
+    if corpus_size is None:
+        docs: list[Document] = []
+        with docs_path.open(encoding="utf-8") as f:
+            for line in f:
+                d = json.loads(line)
+                docs.append(Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {})))
+        print(f"[data] Corpus: {len(docs)} docs total, {len(queries)} queries")
+        return docs, queries
+
+    # Reservoir sampling: gold docs always included, non-gold sampled via Algorithm R
+    gold_doc_ids = {doc_id for q in queries for doc_id in q.relevant_doc_ids}
+    target_non_gold = max(0, corpus_size - len(gold_doc_ids))
+
+    gold_docs: list[Document] = []
+    reservoir: list[Document] = []
+    rng = random.Random(seed)
+    n_non_gold_seen = 0
+
     with docs_path.open(encoding="utf-8") as f:
         for line in f:
             d = json.loads(line)
-            docs.append(Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {})))
+            doc = Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
+            if doc.doc_id in gold_doc_ids:
+                gold_docs.append(doc)
+            else:
+                if n_non_gold_seen < target_non_gold:
+                    reservoir.append(doc)
+                else:
+                    j = rng.randint(0, n_non_gold_seen)
+                    if j < target_non_gold:
+                        reservoir[j] = doc
+                n_non_gold_seen += 1
 
-    print(f"[data] Corpus: {len(docs)} docs total, {len(queries)} queries")
+    docs = gold_docs + reservoir
+    print(
+        f"[data] Corpus: {len(docs)} docs sampled "
+        f"({len(gold_docs)} gold + {len(reservoir)} non-gold of {n_non_gold_seen} seen), "
+        f"{len(queries)} queries"
+    )
     return docs, queries
 
 
@@ -132,6 +166,7 @@ class AnalysisCodeAgent(AgentRunner):
         self._server_process = None
         self._client = BM25Client(
             base_url=f"http://localhost:{self._config.get('server_port', 8765)}",
+            batch_size=self._config.get("bm25_batch_size", 100_000),
         )
         # Set by run() after data loading; used by run_eval()
         self._documents: list | None = None
@@ -460,7 +495,8 @@ class AnalysisCodeAgent(AgentRunner):
         """Override AgentRunner.run() with analysis+hypothesis loop."""
 
         # Load data
-        documents, queries = _load_data(self.split)
+        corpus_size = self._config.get("corpus_size", None)
+        documents, queries = _load_data(self.split, corpus_size=corpus_size)
         self._documents = documents
         self._queries = queries
         print(f"[agent] Loaded {len(documents)} documents, {len(queries)} queries.")

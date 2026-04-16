@@ -52,6 +52,7 @@ class HypothesisResult:
 class CodeAgent:
 
     def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue", log_dir: pathlib.Path | None = None) -> None:
+        self._config = config
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
         self._temperature = config.get("code_temperature", 0.7)

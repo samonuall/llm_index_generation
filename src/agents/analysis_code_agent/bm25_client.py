@@ -40,12 +40,12 @@ class BM25Client:
         base_url: str = "http://localhost:8765",
         timeout: float = 600.0,
         max_retries: int = 3,
+        batch_size: int = 100_000,
     ) -> None:
         self.base_url = base_url
         self.timeout = timeout
         self.max_retries = max_retries
-
-    _BATCH_SIZE = 50_000  # chunks per HTTP request
+        self._batch_size = batch_size
 
     def build_index(self, name: str, chunks: list, persist: bool = False) -> None:
         """Build a BM25 index on the server.
@@ -54,7 +54,7 @@ class BM25Client:
         For larger lists, streams chunks in batches via append/finalize
         to avoid memory-blowing JSON payloads.
         """
-        if len(chunks) <= self._BATCH_SIZE:
+        if len(chunks) <= self._batch_size:
             self._build_index_single(name, chunks, persist)
         else:
             self._build_index_batched(name, chunks, persist)
@@ -79,8 +79,8 @@ class BM25Client:
 
     def _build_index_batched(self, name: str, chunks: list, persist: bool) -> None:
         """Upload chunks in batches, then finalize to build the index."""
-        for i in range(0, len(chunks), self._BATCH_SIZE):
-            batch = chunks[i : i + self._BATCH_SIZE]
+        for i in range(0, len(chunks), self._batch_size):
+            batch = chunks[i : i + self._batch_size]
             self._append_chunks(name, batch)
         self._finalize_index(name, persist)
 
