@@ -73,12 +73,6 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     documents, queries = _load_data(split)
     print(f"[one_shot] {len(documents)} docs, {len(queries)} queries.")
 
-    # --- Load baseline ---
-    baseline_path = _AGENT_DIR.parent / "baseline_results.json"
-    baseline_results = json.loads(baseline_path.read_text(encoding="utf-8"))
-    baseline_recall = baseline_results.get("recall_at_k", 0.0)
-    baseline_ndcg = baseline_results.get("ndcg", 0.0)
-
     # --- Start BM25 server ---
     server_port = config.get("server_port", 8765)
     persist_dir = str(_AGENT_DIR / ".bm25_cache")
@@ -93,15 +87,19 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     time.sleep(3)
     client = BM25Client(base_url=f"http://localhost:{server_port}")
 
-    # --- Identify failing queries via baseline preprocessor ---
+    # --- Evaluate baseline preprocessor on the current corpus ---
     baseline_preprocess_path = _AGENT_DIR.parent / "baseline" / "preprocess.py"
     baseline_code = baseline_preprocess_path.read_text(encoding="utf-8")
+    baseline_recall = 0.0
+    baseline_ndcg = 0.0
 
     try:
         baseline_preprocessor = load_preprocessor_from_code(baseline_code)
         baseline_chunks = baseline_preprocessor.preprocess(documents)
         client.build_index("one_shot_baseline", baseline_chunks, persist=False)
         baseline_eval = run_subset_eval("one_shot_baseline", queries, client, top_k=100)
+        baseline_recall = baseline_eval.recall_at_100
+        baseline_ndcg = baseline_eval.ndcg_at_10
         miss_ids = [r.query_id for r in baseline_eval.per_query if not r.hit_at_100][:30]
     except Exception as e:
         logger.exception("one_shot baseline eval failed")
