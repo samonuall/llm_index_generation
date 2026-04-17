@@ -25,8 +25,12 @@ def _with_retry(max_attempts: int = 3, backoff: float = 2.0):
                     return func(*args, **kwargs)
                 except (httpx.RequestError, httpx.TimeoutException) as e:
                     last_exc = e
-                    if attempt < max_attempts - 1:
-                        time.sleep(backoff * (2 ** attempt))
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code < 500:
+                        raise  # 4xx: client error, retrying won't help
+                    last_exc = e
+                if attempt < max_attempts - 1:
+                    time.sleep(backoff * (2 ** attempt))
             raise last_exc
 
         return wrapper
@@ -38,16 +42,29 @@ class BM25Client:
     def __init__(
         self,
         base_url: str = "http://localhost:8765",
-        timeout: float = 120.0,
+        timeout: float = 600.0,
         max_retries: int = 3,
+        batch_size: int = 100_000,
     ) -> None:
         self.base_url = base_url
         self.timeout = timeout
         self.max_retries = max_retries
+        self._batch_size = batch_size
+
+    def build_index(self, name: str, chunks: list, persist: bool = False) -> None:
+        """Build a BM25 index on the server.
+
+        For small chunk lists (<=_BATCH_SIZE) uses a single POST.
+        For larger lists, streams chunks in batches via append/finalize
+        to avoid memory-blowing JSON payloads.
+        """
+        if len(chunks) <= self._batch_size:
+            self._build_index_single(name, chunks, persist)
+        else:
+            self._build_index_batched(name, chunks, persist)
 
     @_with_retry()
-    def build_index(self, name: str, chunks: list, persist: bool = False) -> None:
-        """POST /index/{name}/build. chunks: list of Chunk dataclass objects."""
+    def _build_index_single(self, name: str, chunks: list, persist: bool) -> None:
         with httpx.Client(base_url=self.base_url, timeout=self.timeout) as client:
             payload = {
                 "chunks": [
@@ -62,6 +79,36 @@ class BM25Client:
                 "persist": persist,
             }
             r = client.post(f"/index/{name}/build", json=payload)
+            r.raise_for_status()
+
+    def _build_index_batched(self, name: str, chunks: list, persist: bool) -> None:
+        """Upload chunks in batches, then finalize to build the index."""
+        for i in range(0, len(chunks), self._batch_size):
+            batch = chunks[i : i + self._batch_size]
+            self._append_chunks(name, batch)
+        self._finalize_index(name, persist)
+
+    @_with_retry()
+    def _append_chunks(self, name: str, chunks: list) -> None:
+        with httpx.Client(base_url=self.base_url, timeout=self.timeout) as client:
+            payload = {
+                "chunks": [
+                    {
+                        "chunk_id": c.chunk_id,
+                        "doc_id": c.doc_id,
+                        "text": c.text,
+                        "metadata": c.metadata,
+                    }
+                    for c in chunks
+                ],
+            }
+            r = client.post(f"/index/{name}/append", json=payload)
+            r.raise_for_status()
+
+    @_with_retry()
+    def _finalize_index(self, name: str, persist: bool) -> None:
+        with httpx.Client(base_url=self.base_url, timeout=self.timeout) as client:
+            r = client.post(f"/index/{name}/finalize", json={"persist": persist})
             r.raise_for_status()
 
     @_with_retry()

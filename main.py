@@ -9,7 +9,7 @@ Usage:
 
     # Analysis agent ablation conditions:
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent
-    uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_history
+    uv run python main.py --agent analysis_code_agent --loops 2 --condition agent_history
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_contrastive
 
     # One-shot LLM baseline (no loops):

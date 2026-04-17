@@ -1,14 +1,21 @@
-analysis_model: "openai/gpt4o"
+analysis_model: "openai/claude-haiku-4-5"
 analysis_temperature: 0.6
-code_model: "openai/gpt4o"
+code_model: "openai/claude-haiku-4-5"
 code_temperature: 1.0
 api_base: "https://thekeymaker.umass.edu/"
 
 server_port: 8765
 server_persist_dir: ".bm25_cache"
+server_startup_timeout: 30       # seconds to wait for BM25 server to be ready; increase to 300 for large persisted indexes
+preprocess_timeout_seconds: 120  # seconds allowed for preprocess() per hypothesis; increase to 1200 for 200K+ doc corpora
+bm25_batch_size: 100000          # chunks per HTTP request to the BM25 server; increase if you have ample RAM
+
+corpus_size: 5000                # null = full corpus; set to integer (e.g. 5000) to reservoir-sample that many docs
+                                 # gold docs (referenced by any query) are always included; remainder is sampled randomly
 
 max_hypotheses: 4
-max_distractors: 10000   # relevant docs + this many distractors = ~10K corpus
+max_distractors: 9000     # relevant docs + this many distractors = ~10K corpus; remove to use full corpus
 recall_improvement_threshold: 0.00001
-analysis_max_turns: 8
+analysis_max_turns: 4
 min_tool_turns: 3
+use_tools: true                  # set to false for models that don't support tool-calling (e.g. gemma)

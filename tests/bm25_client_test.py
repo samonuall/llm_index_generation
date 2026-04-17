@@ -30,7 +30,7 @@ class BM25ClientTests(unittest.TestCase):
         self.assertIn("timeout", signature.parameters)
         # self.assertIn("retries", signature.parameters)
         self.assertEqual(signature.parameters["base_url"].default, "http://localhost:8765")
-        self.assertEqual(signature.parameters["timeout"].default, 120)
+        self.assertEqual(signature.parameters["timeout"].default, 600.0)
         # self.assertEqual(signature.parameters["retries"].default, 3)
 
         client = BM25Client(base_url="http://localhost:9999", timeout=30)
@@ -83,7 +83,7 @@ class BM25ClientTests(unittest.TestCase):
         ) as client_ctor:
             BM25Client().build_index("idx", [chunk], persist=True)
 
-        client_ctor.assert_called_once_with(base_url="http://localhost:8765", timeout=120.0)
+        client_ctor.assert_called_once_with(base_url="http://localhost:8765", timeout=600.0)
         inner_client.post.assert_called_once_with(
             "/index/idx/build",
             json={

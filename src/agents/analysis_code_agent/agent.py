@@ -8,9 +8,12 @@ Overrides AgentRunner.run() to implement:
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
+import logging
 import random
+
 import subprocess
 import sys
 import time
@@ -37,6 +40,36 @@ from .run_journal import RunJournal
 from .run_tracker import RunTracker
 
 
+_DEBUG_LOGGER_NAME = "analysis_code_agent"
+logger = logging.getLogger(_DEBUG_LOGGER_NAME)
+
+
+def _setup_debug_logger(experiment_dir: pathlib.Path) -> logging.Logger:
+    """Configure a DEBUG-level FileHandler at {experiment_dir}/debug.log.
+
+    Idempotent: safe to call multiple times per process (clears previous
+    per-run handlers so each run writes to its own experiment directory).
+    """
+    log = logging.getLogger(_DEBUG_LOGGER_NAME)
+    log.setLevel(logging.DEBUG)
+    log.propagate = False
+    for h in list(log.handlers):
+        log.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
+    fh = logging.FileHandler(experiment_dir / "debug.log", mode="w", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    log.addHandler(fh)
+    log.info("Debug log initialized at %s", experiment_dir / "debug.log")
+    return log
+
+
 def _load_config(overrides: dict | None = None) -> dict:
     config_path = _AGENT_DIR / "config.yaml"
     with config_path.open(encoding="utf-8") as f:
@@ -46,20 +79,32 @@ def _load_config(overrides: dict | None = None) -> dict:
     return config
 
 
-def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, seed: int = 42):
-    """Load queries and a manageable corpus: all relevant docs + sampled distractors.
+def _doc_to_dict(doc) -> dict:
+    return {"doc_id": doc.doc_id, "text": doc.text, "metadata": doc.metadata}
 
-    With 1M+ doc corpora, loading everything is impractical for fast iteration.
-    We keep ALL relevant documents (gold answers) and sample max_distractors from
-    the rest, giving a realistic but fast eval corpus (~10K docs total by default).
+
+def _dict_to_doc(d, Document):
+    return Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
+
+
+def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None, seed: int = 42):
+    """Load queries and corpus from data/.
+
+    If corpus_size is None, loads every document. Otherwise uses reservoir sampling
+    to select corpus_size documents, always retaining every gold doc (any doc
+    referenced by at least one query's relevant_doc_ids).
+
+    Two cache files are used to avoid re-scanning the corpus on repeat runs:
+      - gold_docs_cache.json          — full gold doc content; shared across all seeds/sizes
+      - distractors_seed{s}_size{n}.json — sampled non-gold docs for a specific (seed, corpus_size)
     """
+    import random
     from schema import Document, EvalQuery
 
     data_dir = _PROJECT_ROOT / "data" / split
     if not data_dir.exists():
         data_dir = _PROJECT_ROOT / "data"
 
-    # Load queries first to know which doc_ids are relevant
     queries = []
     queries_path = data_dir / "queries.jsonl"
     with queries_path.open(encoding="utf-8") as f:
@@ -71,40 +116,64 @@ def _load_data(split: str = "tip_of_the_tongue", max_distractors: int = 9000, se
                 relevant_doc_ids=q["relevant_doc_ids"],
             ))
 
-    relevant_ids: set[str] = set()
-    for q in queries:
-        relevant_ids.update(q.relevant_doc_ids)
-
-    # Stream documents: always keep relevant, reservoir-sample distractors
-    rng = random.Random(seed)
-    relevant_docs: list[Document] = []
-    distractor_reservoir: list[Document] = []
-
     docs_path = data_dir / "documents.jsonl"
-    distractor_count = 0
+
+    if corpus_size is None:
+        docs: list[Document] = []
+        with docs_path.open(encoding="utf-8") as f:
+            for line in f:
+                d = json.loads(line)
+                docs.append(Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {})))
+        print(f"[data] Corpus: {len(docs)} docs total, {len(queries)} queries")
+        return docs, queries
+
+    gold_cache_path = data_dir / "gold_docs_cache.json"
+    distractor_cache_path = data_dir / f"distractors_seed{seed}_size{corpus_size}.json"
+
+    # Full cache hit — no corpus scan needed.
+    if gold_cache_path.exists() and distractor_cache_path.exists():
+        gold_docs = [_dict_to_doc(d, Document) for d in json.loads(gold_cache_path.read_text(encoding="utf-8"))]
+        reservoir = [_dict_to_doc(d, Document) for d in json.loads(distractor_cache_path.read_text(encoding="utf-8"))]
+        print(
+            f"[data] Corpus loaded from cache: {len(gold_docs) + len(reservoir)} docs "
+            f"({len(gold_docs)} gold + {len(reservoir)} non-gold), {len(queries)} queries"
+        )
+        return gold_docs + reservoir, queries
+
+    # Cache miss — stream corpus, run reservoir sampling, then write cache files.
+    gold_doc_ids = {doc_id for q in queries for doc_id in q.relevant_doc_ids}
+    target_non_gold = max(0, corpus_size - len(gold_doc_ids))
+
+    gold_docs = []
+    reservoir = []
+    rng = random.Random(seed)
+    n_non_gold_seen = 0
+
     with docs_path.open(encoding="utf-8") as f:
         for line in f:
             d = json.loads(line)
             doc = Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
-            if doc.doc_id in relevant_ids:
-                relevant_docs.append(doc)
+            if doc.doc_id in gold_doc_ids:
+                gold_docs.append(doc)
             else:
-                distractor_count += 1
-                if len(distractor_reservoir) < max_distractors:
-                    distractor_reservoir.append(doc)
+                if n_non_gold_seen < target_non_gold:
+                    reservoir.append(doc)
                 else:
-                    # Reservoir sampling: replace with decreasing probability
-                    j = rng.randint(0, distractor_count - 1)
-                    if j < max_distractors:
-                        distractor_reservoir[j] = doc
+                    j = rng.randint(0, n_non_gold_seen)
+                    if j < target_non_gold:
+                        reservoir[j] = doc
+                n_non_gold_seen += 1
 
-    docs = relevant_docs + distractor_reservoir
-    rng.shuffle(docs)
+    if not gold_cache_path.exists():
+        gold_cache_path.write_text(json.dumps([_doc_to_dict(d) for d in gold_docs]), encoding="utf-8")
+        print(f"[data] Gold docs cache written: {gold_cache_path} ({len(gold_docs)} docs)")
+    distractor_cache_path.write_text(json.dumps([_doc_to_dict(d) for d in reservoir]), encoding="utf-8")
     print(
-        f"[data] Corpus: {len(relevant_docs)} relevant + {len(distractor_reservoir)} distractors "
-        f"= {len(docs)} docs total (from {distractor_count + len(relevant_docs)} available)"
+        f"[data] Corpus: {len(gold_docs) + len(reservoir)} docs sampled "
+        f"({len(gold_docs)} gold + {len(reservoir)} non-gold of {n_non_gold_seen} seen), "
+        f"{len(queries)} queries — distractor cache written to {distractor_cache_path}"
     )
-    return docs, queries
+    return gold_docs + reservoir, queries
 
 
 class AnalysisCodeAgent(AgentRunner):
@@ -126,6 +195,7 @@ class AnalysisCodeAgent(AgentRunner):
         self._server_process = None
         self._client = BM25Client(
             base_url=f"http://localhost:{self._config.get('server_port', 8765)}",
+            batch_size=self._config.get("bm25_batch_size", 100_000),
         )
         # Set by run() after data loading; used by run_eval()
         self._documents: list | None = None
@@ -212,15 +282,16 @@ class AnalysisCodeAgent(AgentRunner):
         )
         atexit.register(self._kill_server)
 
-        # Wait for server to be ready (up to 15s)
-        for i in range(30):
+        # Wait for server to be ready; configurable so small-corpus runs aren't penalised
+        max_wait = self._config.get("server_startup_timeout", 30)
+        for i in range(max_wait * 2):
             time.sleep(0.5)
             if self._client.health():
                 print(f"[agent] BM25 server ready (took {(i+1)*0.5:.1f}s).")
                 return
 
         raise RuntimeError(
-            f"BM25 server failed to start after 15s. "
+            f"BM25 server failed to start after {max_wait}s. "
             f"Check: uv run python {server_path} --port {port}"
         )
 
@@ -453,9 +524,8 @@ class AnalysisCodeAgent(AgentRunner):
         """Override AgentRunner.run() with analysis+hypothesis loop."""
 
         # Load data
-        max_distractors = self._config.get("max_distractors", 9000)
-        seed = self._config.get("seed", 42)
-        documents, queries = _load_data(self.split, max_distractors=max_distractors, seed=seed)
+        corpus_size = self._config.get("corpus_size", None)
+        documents, queries = _load_data(self.split, corpus_size=corpus_size)
         self._documents = documents
         self._queries = queries
         print(f"[agent] Loaded {len(documents)} documents, {len(queries)} queries.")
@@ -476,7 +546,14 @@ class AnalysisCodeAgent(AgentRunner):
         exp_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self._experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"{model_name}_{self.condition}_{exp_timestamp}"
         self._experiment_dir.mkdir(parents=True, exist_ok=True)
+        _setup_debug_logger(self._experiment_dir)
         print(f"[agent] Experiment logs → {self._experiment_dir}")
+        logger.info(
+            "Run start: model=%s condition=%s split=%s loops=%d baseline_recall@100=%.4f baseline_ndcg@10=%.4f",
+            model_name, self.condition, self.split, n_loops,
+            baseline_results.get("recall_at_k", 0.0),
+            baseline_results.get("ndcg", 0.0),
+        )
 
         # Create tracker + sub-agents + journal
         tracker = RunTracker()
@@ -494,6 +571,7 @@ class AnalysisCodeAgent(AgentRunner):
             print(f"\n{'#'*60}")
             print(f"# Loop {i + 1} / {n_loops}")
             print(f"{'#'*60}")
+            logger.info("=== Loop %d/%d start ===", i + 1, n_loops)
 
             # Full harness eval — authoritative recall@100 for this loop's starting point
             try:
@@ -501,9 +579,8 @@ class AnalysisCodeAgent(AgentRunner):
                 eval_log = self._experiment_dir / f"iteration_{i}_eval.json"
                 eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
             except Exception as e:
+                logger.exception("Eval failed on loop %d", i + 1)
                 print(f"[agent] Eval failed (loop {i + 1}): {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
             # Anchor: harness recall@100 at the start of this loop
@@ -517,9 +594,10 @@ class AnalysisCodeAgent(AgentRunner):
             print("[agent] Building 'current' index on BM25 server ...")
             try:
                 chunks = self._preprocess_with_current_code(documents, current_code)
-                self._client.build_index("current", chunks, persist=True)
+                self._client.build_index("current", chunks, persist=False)
                 print(f"[agent] 'current' index built with {len(chunks)} chunks.")
             except Exception as e:
+                logger.exception("Index build failed on loop %d", i + 1)
                 print(f"[agent] Index build failed: {e}")
                 continue
 
@@ -529,9 +607,8 @@ class AnalysisCodeAgent(AgentRunner):
                 raw_results = self._enrich_eval_results(raw_results, queries, self._client)
                 print(f"[agent] Enriched with {len(raw_results.get('query_results', []))} query results.")
             except Exception as e:
+                logger.exception("Enrichment failed on loop %d", i + 1)
                 print(f"[agent] Enrichment failed: {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
             # Record iteration in journal
@@ -550,23 +627,22 @@ class AnalysisCodeAgent(AgentRunner):
                 )
                 self._log_analysis(i, analysis_result)
             except Exception as e:
+                logger.exception("Analysis agent failed on loop %d", i + 1)
                 print(f"[agent] Analysis failed: {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
             # Hypothesis generation
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
             persistent_fails = journal.persistent_failure_ids(min_iters=len(journal.iterations))
             query_lookup = {q.query_id: q.query_text for q in queries} if self._use_contrastive else None
-            hypotheses = code_agent.generate_hypotheses(
+            hypotheses = asyncio.run(code_agent.generate_hypotheses_async(
                 analysis_result.summary,
                 current_code,
                 n=max_hypotheses,
                 past_hypotheses=all_past_hypotheses if (all_past_hypotheses and self._use_history) else None,
                 persistent_failure_ids=persistent_fails if (persistent_fails and self._use_history) else None,
                 query_lookup=query_lookup,
-            )
+            ))
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")
 
             if not hypotheses:
@@ -653,6 +729,8 @@ class AnalysisCodeAgent(AgentRunner):
                         # Validate and quick-test the synthesized code
                         val_err = code_agent._validate_code(synthesized, documents)
                         if val_err:
+                            logger.error("Synthesis validation failed on loop %d:\n%s", i, val_err)
+                            logger.debug("Synthesized code that failed validation:\n%s", synthesized)
                             print(f"[agent] Synthesis validation failed: {val_err[:80]} — falling back to best hypothesis.")
                             final_code = best_hyp.hypothesis.code
                         else:
@@ -679,6 +757,7 @@ class AnalysisCodeAgent(AgentRunner):
                         print(f"[agent] Synthesized recall@100={candidate_recall_100:.4f} "
                               f"(global best so far: {best_recall_100:.4f})")
                     except Exception as e:
+                        logger.exception("Harness eval of synthesized code failed on loop %d", i)
                         print(f"[agent] Harness eval of synthesized code failed: {e} — reverting to pre-loop code.")
                         self._write_preprocess(current_code)
                         continue
@@ -718,6 +797,11 @@ class AnalysisCodeAgent(AgentRunner):
                     print(f"[agent] Global best updated → recall@100={best_recall_100:.4f}")
                 else:
                     print(f"[agent] Candidate did not beat global best — preprocess.py unchanged.")
+                logger.info(
+                    "Loop %d end: adopted=%s synthesized=%s candidate_recall@100=%.4f best=%.4f",
+                    i + 1, best_hyp.hypothesis.id, was_synthesized,
+                    candidate_recall_100, best_recall_100,
+                )
             else:
                 # No hypothesis improved — write accepted JSON indicating no adoption
                 accepted_data = {
@@ -728,6 +812,7 @@ class AnalysisCodeAgent(AgentRunner):
                 accepted_path = self._experiment_dir / f"iteration_{i}_accepted.json"
                 accepted_path.write_text(json.dumps(accepted_data, indent=2), encoding="utf-8")
                 print(f"[agent] No hypothesis improved over current — preprocess.py unchanged.")
+                logger.info("Loop %d end: no adoption (best=%.4f)", i + 1, best_recall_100)
 
         # Final eval
         print(f"\n{'#'*60}")
@@ -741,6 +826,7 @@ class AnalysisCodeAgent(AgentRunner):
             print(f"\n[agent] Improvement: recall@100 {baseline_recall:.4f} → {final_recall:.4f} "
                   f"({final_recall - baseline_recall:+.4f})")
         except Exception as e:
+            logger.exception("Final eval failed")
             print(f"[agent] Final eval failed: {e}")
 
         # Write results JSON

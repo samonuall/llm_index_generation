@@ -101,7 +101,7 @@ class TestConfigLoading:
         expected_keys = [
             "analysis_model", "analysis_temperature", "code_model",
             "code_temperature", "api_base", "server_port",
-            "max_hypotheses", "max_distractors", "analysis_max_turns",
+            "max_hypotheses", "analysis_max_turns",
             "min_tool_turns",
         ]
         for key in expected_keys:
@@ -895,3 +895,129 @@ class TestBaselineFromCurrentCorpus:
         """AgentRunner no longer references _BASELINE_RESULTS_PATH."""
         ar_mod = _load_module("agent_runner_test2", _AGENTS_DIR / "agent_runner.py")
         assert not hasattr(ar_mod, "_BASELINE_RESULTS_PATH")
+
+
+# ---------------------------------------------------------------------------
+# Idea parsing (Phase 1 of generate_hypotheses_async)
+# ---------------------------------------------------------------------------
+
+
+# Fake LLM responses for idea parsing tests
+_IDEAS_JSON = json.dumps([
+    {
+        "id": "H1",
+        "description": "Chunk by sections",
+        "rationale": "BM25 penalises long docs",
+        "query_ids": "q1, q2",
+        "falsifying": "recall does not improve",
+    },
+    {
+        "id": "H2",
+        "description": "Sliding window",
+        "rationale": "Overlap preserves context",
+        "query_ids": "q3",
+        "falsifying": "IDF dilution",
+    },
+])
+
+_IDEAS_JSON_RESPONSE = f"<hypotheses>{_IDEAS_JSON}</hypotheses>"
+
+_IDEAS_MARKDOWN_RESPONSE = """\
+### H1: Chunk by sections
+Rationale: BM25 penalises long docs
+Query IDs: q1, q2
+Falsifying: recall does not improve
+
+### H2: Sliding window
+Rationale: Overlap preserves context
+Query IDs: q3
+Falsifying: IDF dilution
+"""
+
+
+def _make_code_agent(config=None):
+    """Create a CodeAgent with default config, mocking system prompt read."""
+    if config is None:
+        config = {}
+    with patch.object(pathlib.Path, "read_text", return_value="fake system prompt"):
+        return CodeAgent(config)
+
+
+class TestCodeAgentIdeaParsing:
+    """Test that _generate_hypothesis_ideas parses both JSON and markdown formats."""
+
+    @patch("src.agents.analysis_code_agent.code_agent.completion")
+    def test_json_ideas_parsed(self, mock_comp):
+        """LLM returns ideas in <hypotheses>JSON</hypotheses> — must parse correctly."""
+        agent = _make_code_agent()
+        mock_comp.return_value = make_llm_response(content=_IDEAS_JSON_RESPONSE)
+
+        ideas = agent._generate_hypothesis_ideas(
+            analysis_summary="summary", current_code="pass", n=4,
+        )
+        assert len(ideas) == 2
+        assert ideas[0]["id"] == "H1"
+        assert ideas[0]["description"] == "Chunk by sections"
+        assert ideas[1]["id"] == "H2"
+
+    @patch("src.agents.analysis_code_agent.code_agent.completion")
+    def test_markdown_ideas_parsed(self, mock_comp):
+        """LLM returns ideas in markdown format — must still work."""
+        agent = _make_code_agent()
+        mock_comp.return_value = make_llm_response(content=_IDEAS_MARKDOWN_RESPONSE)
+
+        ideas = agent._generate_hypothesis_ideas(
+            analysis_summary="summary", current_code="pass", n=4,
+        )
+        assert len(ideas) == 2
+        assert ideas[0]["id"] == "H1"
+        assert "sections" in ideas[0]["description"].lower()
+
+    @patch("src.agents.analysis_code_agent.code_agent.completion")
+    def test_unparseable_returns_empty(self, mock_comp):
+        """LLM returns garbage — should return empty list, not crash."""
+        agent = _make_code_agent()
+        mock_comp.return_value = make_llm_response(content="I don't know what to do.")
+
+        ideas = agent._generate_hypothesis_ideas(
+            analysis_summary="summary", current_code="pass", n=4,
+        )
+        assert ideas == []
+
+    @patch("src.agents.analysis_code_agent.code_agent.completion")
+    def test_n_caps_returned_ideas(self, mock_comp):
+        """Returned ideas are capped at n."""
+        agent = _make_code_agent()
+        mock_comp.return_value = make_llm_response(content=_IDEAS_JSON_RESPONSE)
+
+        ideas = agent._generate_hypothesis_ideas(
+            analysis_summary="summary", current_code="pass", n=1,
+        )
+        assert len(ideas) == 1
+
+    @patch("src.agents.analysis_code_agent.llm_call.async_completion")
+    @patch("src.agents.analysis_code_agent.code_agent.completion")
+    def test_async_generates_hypotheses_from_json_ideas(self, mock_comp, mock_async_comp):
+        """Full async path: JSON ideas parsed → Phase 2 code generation attempted."""
+        import asyncio
+        agent = _make_code_agent()
+
+        # Phase 1 (sync completion): return JSON ideas
+        mock_comp.return_value = make_llm_response(content=_IDEAS_JSON_RESPONSE)
+        # Phase 2 (async_completion): return code for each idea
+        code_resp = make_llm_response(
+            content='### H1: test\n```python\nclass Preprocessor:\n    pass\n```'
+        )
+
+        async def fake_async_completion(**kwargs):
+            return code_resp
+
+        mock_async_comp.side_effect = fake_async_completion
+
+        hypotheses = asyncio.run(agent.generate_hypotheses_async(
+            analysis_summary="summary", current_code="pass", n=2,
+        ))
+        # Phase 1 parsed 2 ideas, Phase 2 called for each
+        assert mock_comp.call_count == 1  # Phase 1
+        assert mock_async_comp.call_count == 2  # Phase 2: one per idea
+        assert len(hypotheses) == 2

@@ -7,6 +7,7 @@ BM25 retrieval failures and produce a structured analysis summary.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import pathlib
@@ -19,6 +20,8 @@ from .llm_call import completion
 _PROJECT_ROOT = pathlib.Path(__file__).parents[3]
 load_dotenv(_PROJECT_ROOT / ".env")
 _AGENT_DIR = pathlib.Path(__file__).parent
+
+logger = logging.getLogger("analysis_code_agent")
 
 import re as _re
 import sys as _sys
@@ -58,7 +61,9 @@ class AnalysisAgent:
         self._temperature = config.get("analysis_temperature", 0.3)
         self._max_turns = config.get("analysis_max_turns", 8)
         self._min_tool_turns = config.get("min_tool_turns", 3)
+        self._use_tools = config.get("use_tools", True)
         self._bash_timeout = config.get("bash_timeout_seconds", 30)
+        self._llm_timeout = config.get("analysis_llm_timeout", None)
         # Only pass api_key explicitly for proxy; native providers read key from env.
         _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_key = _proxy_key if config.get("api_base") else None
@@ -102,31 +107,47 @@ class AnalysisAgent:
         summary_text = None
 
         for turn in range(self._max_turns):
-            msg = self._call_llm(messages, turn, tools=TOOL_SCHEMAS)
+            msg = self._call_llm(messages, turn, tools=TOOL_SCHEMAS if self._use_tools else None)
             if msg is None:
                 break
 
             # Append assistant message as dict (preserving tool_calls)
+            tool_calls = getattr(msg, "tool_calls", None) or []
             assistant_dict = {"role": "assistant", "content": msg.content}
-            if msg.tool_calls:
+            if tool_calls:
                 assistant_dict["tool_calls"] = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                     }
-                    for tc in msg.tool_calls
+                    for tc in tool_calls
                 ]
             messages.append(assistant_dict)
 
             # If tool calls present, dispatch them
-            if msg.tool_calls:
-                for tc in msg.tool_calls:
+            if tool_calls:
+                for tc in tool_calls:
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
+                        logger.warning(
+                            "Failed to parse tool args as JSON for %s. Raw: %r",
+                            tc.function.name, tc.function.arguments,
+                        )
                         args = {}
-                    result = dispatch_tool(tc.function.name, args, client=client, split=split)
+                    try:
+                        result = dispatch_tool(tc.function.name, args, client=client, split=split)
+                        logger.debug(
+                            "Tool call %s(%s) → %d chars",
+                            tc.function.name, args, len(str(result)),
+                        )
+                    except Exception as e:
+                        logger.exception(
+                            "Tool call %s(%s) raised",
+                            tc.function.name, args,
+                        )
+                        result = f"[tool error] {type(e).__name__}: {e}"
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                 tool_turns += 1
                 continue
@@ -138,8 +159,8 @@ class AnalysisAgent:
                 summary_text = match.group(1).strip()
                 break
 
-            # No summary tag — nudge if not enough tool turns
-            if tool_turns < self._min_tool_turns:
+            # No summary tag — nudge if not enough tool turns (only when tools are enabled)
+            if self._use_tools and tool_turns < self._min_tool_turns:
                 nudge = (
                     f"You have only completed {tool_turns}/{self._min_tool_turns} tool-using turns. "
                     f"Please investigate more failing queries using the available tools "
@@ -148,7 +169,7 @@ class AnalysisAgent:
                 messages.append({"role": "user", "content": nudge})
                 continue
 
-            # Enough tool turns, no summary tag, no tool calls — exit
+            # No summary tag, no tool calls — exit
             break
 
         # If no summary found in loop, check all assistant messages for <summary>
@@ -179,6 +200,7 @@ class AnalysisAgent:
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                timeout=self._llm_timeout,
             )
             if tools:
                 kwargs["tools"] = tools
@@ -191,24 +213,23 @@ class AnalysisAgent:
         try:
             return _do_call(messages)
         except Exception as e:
-            import traceback
+            logger.exception("Analysis LLM call failed on turn %d", turn)
             print(f"[analysis_agent] LLM call failed (turn {turn}): {type(e).__name__}: {e}")
-            traceback.print_exc()
             if "ContentPolicyViolation" in type(e).__name__ or "content_policy" in str(e).lower() or "content management policy" in str(e).lower():
                 sanitized = self._sanitize_messages(messages)
                 messages[:] = sanitized
                 try:
                     return _do_call(sanitized)
                 except Exception as e2:
+                    logger.exception("Analysis LLM retry (sanitized) failed on turn %d", turn)
                     print(f"[analysis_agent] LLM retry (sanitized) failed: {type(e2).__name__}: {e2}")
-                    traceback.print_exc()
                     return None
             time.sleep(5)
             try:
                 return _do_call(messages)
             except Exception as e2:
+                logger.exception("Analysis LLM retry failed on turn %d", turn)
                 print(f"[analysis_agent] LLM retry failed: {type(e2).__name__}: {e2}")
-                traceback.print_exc()
                 return None
 
     def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
@@ -273,12 +294,13 @@ class AnalysisAgent:
                 temperature=self._temperature,
                 api_key=self._api_key,
                 api_base=self._api_base,
+                timeout=self._llm_timeout,
             )
             msg = response.choices[0].message
             text = msg.content or ""
 
             # Guardrail: if LLM produced tool calls or no <summary> tags, retry once
-            needs_retry = msg.tool_calls or "<summary>" not in text
+            needs_retry = (getattr(msg, "tool_calls", None) or False) or "<summary>" not in text
             if needs_retry:
                 summary_messages.append({"role": "assistant", "content": text})
                 summary_messages.append({
@@ -295,6 +317,7 @@ class AnalysisAgent:
                     temperature=self._temperature,
                     api_key=self._api_key,
                     api_base=self._api_base,
+                    timeout=self._llm_timeout,
                 )
                 text = response2.choices[0].message.content or "No summary generated."
 
@@ -307,9 +330,8 @@ class AnalysisAgent:
 
             return summary
         except Exception as e:
-            import traceback
+            logger.exception("Summary request failed")
             print(f"[analysis_agent] _request_summary failed: {type(e).__name__}: {e}")
-            traceback.print_exc()
             return "Analysis failed to produce summary."
 
     def _build_candidates(self, eval_results: dict, baseline_results: dict) -> dict:

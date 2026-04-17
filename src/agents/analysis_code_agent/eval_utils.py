@@ -17,11 +17,24 @@ from dataclasses import dataclass, field
 @dataclass
 class SubsetEvalResult:
     query_id: str
-    hit_at_10: bool
-    hit_at_100: bool
-    rank: int | None  # 1-indexed, None if not in top_k
+    recall_at_10: float  # fractional: |relevant ∩ retrieved[:10]| / |relevant|
+    recall_at_100: float  # fractional: |relevant ∩ retrieved[:100]| / |relevant|
+    ranks: list[int]  # 1-indexed ranks of all relevant docs found (empty if none)
     ndcg_at_10: float
     retrieved_doc_ids: list[str]
+
+    @property
+    def hit_at_10(self) -> bool:
+        return self.recall_at_10 > 0
+
+    @property
+    def hit_at_100(self) -> bool:
+        return self.recall_at_100 > 0
+
+    @property
+    def rank(self) -> int | None:
+        """Best (lowest) rank among relevant docs, for backward compat."""
+        return min(self.ranks) if self.ranks else None
 
 
 @dataclass
@@ -53,46 +66,57 @@ def run_subset_eval(
     results_by_qid = {r["query_id"]: r["ranked_docs"] for r in batch_results}
 
     per_query = []
-    hits_at_10 = 0
-    hits_at_100 = 0
+    recall_10_sum = 0.0
+    recall_100_sum = 0.0
     ndcg_sum = 0.0
 
     for q in queries:
         ranked_docs = results_by_qid.get(q.query_id, [])
         retrieved_doc_ids = [d["doc_id"] for d in ranked_docs]
+        relevant_set = set(q.relevant_doc_ids)
+        n_relevant = len(relevant_set) or 1
 
-        # Find best rank of any relevant doc
-        rank = None
-        for i, doc_id in enumerate(retrieved_doc_ids):
-            if doc_id in q.relevant_doc_ids:
-                rank = i + 1  # 1-indexed
-                break
+        # Collect ranks of all relevant docs
+        ranks = [
+            i + 1 for i, doc_id in enumerate(retrieved_doc_ids)
+            if doc_id in relevant_set
+        ]
 
-        hit_10 = rank is not None and rank <= 10
-        hit_100 = rank is not None and rank <= 100
+        # Fractional recall
+        recall_10 = len([r for r in ranks if r <= 10]) / n_relevant
+        recall_100 = len([r for r in ranks if r <= 100]) / n_relevant
 
-        # nDCG@10: for single relevant doc, nDCG = 1/log2(rank+1) if rank<=10
-        ndcg = (1.0 / math.log2(rank + 1)) if (rank is not None and rank <= 10) else 0.0
+        # nDCG@10: DCG over all relevant docs in top-10, normalized by IDCG
+        dcg = sum(
+            1.0 / math.log2(i + 1)
+            for i, doc_id in enumerate(retrieved_doc_ids[:10], start=1)
+            if doc_id in relevant_set
+        )
+        idcg = sum(
+            1.0 / math.log2(i + 1)
+            for i in range(1, min(len(relevant_set), 10) + 1)
+        )
+        ndcg = (dcg / idcg) if idcg > 0 else 0.0
 
         per_query.append(
             SubsetEvalResult(
                 query_id=q.query_id,
-                hit_at_10=hit_10,
-                hit_at_100=hit_100,
-                rank=rank,
+                recall_at_10=recall_10,
+                recall_at_100=recall_100,
+                ranks=ranks,
                 ndcg_at_10=ndcg,
                 retrieved_doc_ids=retrieved_doc_ids[:10],
             )
         )
 
-        hits_at_10 += int(hit_10)
-        hits_at_100 += int(hit_100)
+        recall_10_sum += recall_10
+        recall_100_sum += recall_100
         ndcg_sum += ndcg
 
     n = len(queries) or 1
     return SubsetEvalSummary(
-        recall_at_10=hits_at_10 / n,
-        recall_at_100=hits_at_100 / n,
+        recall_at_10=recall_10_sum / n,
+        recall_at_100=recall_100_sum / n,
         ndcg_at_10=ndcg_sum / n,
         n_queries=len(queries),
         per_query=per_query,

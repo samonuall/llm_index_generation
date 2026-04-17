@@ -30,7 +30,7 @@ class TestBM25ClientInitialization:
         client = BM25Client()
         
         assert client.base_url == "http://localhost:8765"
-        assert client.timeout == 120.0
+        assert client.timeout == 600.0
         assert client.max_retries == 3
     
     def test_client_custom_initialization(self):

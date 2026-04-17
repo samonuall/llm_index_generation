@@ -27,95 +27,81 @@ from schema import EvalQuery, Chunk, Document
 
 class TestSubsetEvalResultValidation:
     """Validate SubsetEvalResult dataclass structure and data."""
-    
+
     def test_valid_result_creation(self):
-        """SubsetEvalResult can be created with valid data."""
         result = SubsetEvalResult(
             query_id="q1",
-            hit_at_10=True,
-            hit_at_100=True,
-            rank=5,
+            recall_at_10=1.0,
+            recall_at_100=1.0,
+            ranks=[5],
             ndcg_at_10=0.5,
-            retrieved_doc_ids=["doc1", "doc2", "doc3"]
+            retrieved_doc_ids=["doc1", "doc2", "doc3"],
         )
-        
         assert result.query_id == "q1"
         assert result.hit_at_10 is True
         assert result.hit_at_100 is True
         assert result.rank == 5
         assert result.ndcg_at_10 == 0.5
         assert len(result.retrieved_doc_ids) == 3
-    
-    def test_result_with_none_rank(self):
-        """SubsetEvalResult handles None rank (doc not found)."""
+
+    def test_result_with_no_hit(self):
         result = SubsetEvalResult(
             query_id="q_miss",
-            hit_at_10=False,
-            hit_at_100=False,
-            rank=None,
+            recall_at_10=0.0,
+            recall_at_100=0.0,
+            ranks=[],
             ndcg_at_10=0.0,
-            retrieved_doc_ids=["wrong1", "wrong2"]
+            retrieved_doc_ids=["wrong1", "wrong2"],
         )
-        
         assert result.rank is None
         assert result.hit_at_10 is False
         assert result.hit_at_100 is False
-        assert result.ndcg_at_10 == 0.0
-    
-    def test_result_rank_consistency(self):
-        """Rank consistency: hit_at_10 implies hit_at_100."""
+
+    def test_hit_at_10_implies_hit_at_100(self):
         result = SubsetEvalResult(
             query_id="q1",
-            hit_at_10=True,
-            hit_at_100=True,
-            rank=8,
+            recall_at_10=1.0,
+            recall_at_100=1.0,
+            ranks=[8],
             ndcg_at_10=0.5,
-            retrieved_doc_ids=[]
+            retrieved_doc_ids=[],
         )
-        
-        # hit_at_10 should always imply hit_at_100
         if result.hit_at_10:
             assert result.hit_at_100, "hit_at_10 must imply hit_at_100"
-    
-    def test_result_rank_bounds(self):
-        """Rank should be in valid range when set."""
-        # Valid ranks
+
+    def test_rank_property_returns_best_rank(self):
         for rank in [1, 5, 10, 50, 100]:
             result = SubsetEvalResult(
                 query_id=f"q_rank_{rank}",
-                hit_at_10=(rank <= 10),
-                hit_at_100=(rank <= 100),
-                rank=rank,
+                recall_at_10=1.0 if rank <= 10 else 0.0,
+                recall_at_100=1.0 if rank <= 100 else 0.0,
+                ranks=[rank],
                 ndcg_at_10=(1.0 / math.log2(rank + 1)) if rank <= 10 else 0.0,
-                retrieved_doc_ids=[]
+                retrieved_doc_ids=[],
             )
             assert result.rank == rank
             assert result.rank >= 1
-    
+
     def test_result_ndcg_range(self):
-        """nDCG@10 should be in [0, 1] range."""
         result = SubsetEvalResult(
             query_id="q1",
-            hit_at_10=True,
-            hit_at_100=True,
-            rank=1,
+            recall_at_10=1.0,
+            recall_at_100=1.0,
+            ranks=[1],
             ndcg_at_10=1.0,
-            retrieved_doc_ids=[]
+            retrieved_doc_ids=[],
         )
-        
         assert 0.0 <= result.ndcg_at_10 <= 1.0
-    
+
     def test_result_empty_retrieved_docs(self):
-        """SubsetEvalResult handles empty retrieved_doc_ids."""
         result = SubsetEvalResult(
             query_id="q_empty",
-            hit_at_10=False,
-            hit_at_100=False,
-            rank=None,
+            recall_at_10=0.0,
+            recall_at_100=0.0,
+            ranks=[],
             ndcg_at_10=0.0,
-            retrieved_doc_ids=[]
+            retrieved_doc_ids=[],
         )
-        
         assert result.retrieved_doc_ids == []
         assert result.rank is None
 

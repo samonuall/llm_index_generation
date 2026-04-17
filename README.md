@@ -4,221 +4,201 @@ Research project testing LLM-driven approaches for iteratively writing preproces
 
 ## Overview
 
-The core idea: an LLM agent only controls a single `preprocess()` function. Everything else — the retriever, tokenizer, evaluation metrics, and dataset — is fixed. The agent's goal is to transform raw Wikipedia documents into chunks that maximize Recall@k and MRR against a set of "tip of the tongue" queries.
-
-## Big Picture
+The core idea: an LLM agent only controls a single `preprocess()` function. Everything else — the retriever, tokenizer, evaluation metrics, and dataset — is fixed. The agent's goal is to transform raw Wikipedia documents into chunks that maximize Recall@k and nDCG against a set of "tip of the tongue" queries.
 
 ```
-Raw Documents → preprocess() → Chunks → BM25 Index → Eval Queries → Recall@k + MRR
+Raw Documents → preprocess() → Chunks → BM25 Index → Eval Queries → Recall@k + nDCG
                     ↑ (agent controls only this)
 ```
 
 ## Dataset
 
-- **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb) — `tip_of_the_tongue` split
-- **Corpus**: Full Wikipedia articles (streamed from HuggingFace, not stored)
-- **Queries**: "Tip of the tongue" natural language descriptions of Wikipedia entities
-- **Scope**: 135 eval queries (default), each with one or more ground-truth `relevant_doc_ids`
+- **Source**: [CRUMB](https://huggingface.co/datasets/jfkback/crumb)
+- **Corpus**: Full Wikipedia articles (streamed from HuggingFace, cached locally)
+- **Queries**: Natural language descriptions of Wikipedia entities
 
+| Split | Documents | Queries |
+|-------|-----------|---------|
+| `tip_of_the_tongue` | 1,083,337 | 135 |
+| `paper_retrieval` | 363,133 | 72 |
+| `clinical_trial` | 914,628 | 113 |
+| `code_retrieval` | 232,444 | 3,665 |
+| `legal_qa` | 1,182,626 | 6,753 |
+| `set_operation_entity_retrieval` | 651,704 | 423 |
+| `theorem_retrieval` | 23,839 | 69 |
+| `stack_exchange` | 40,956 | 107 |
 
 ## Agents
 
-| Agent | Strategy | Notes |
-|-------|----------|-------|
-| `baseline` | One chunk per document, raw text | Performance floor |
-| `gemini_sdk` | Section-aware Wikipedia chunking with title propagation | Gemini-generated, iteratively improved |
-| `lite_llm_agent` | Configurable via `config.yaml`; uses LiteLLM for provider-agnostic LLM calls | Supports any model accessible via LiteLLM |
-| `test_agent` | Same as `lite_llm_agent` with `test_mode=True` | Returns a mock LLM response; no API calls made |
-
-## Algos
-
-Download full corpora for CRUMB benchmark splits:
-
-| Split Name | Flag | Documents | Queries |
-|------------|------|-----------|---------|
-| Paper Retrieval | `paper_retrieval` | 363,133 | 72 |
-| Tip of the Tongue | `tip_of_the_tongue` | 1,083,337 | 135 |
-| Clinical Trial | `clinical_trial` | 914,628 | 113 |
-| Code Retrieval | `code_retrieval` | 232,444 | 3,665 |
-| Legal QA | `legal_qa` | 1,182,626 | 6,753 |
-| Set Operations | `set_operation_entity_retrieval` | 651,704 | 423 |
-| Theorem Retrieval | `theorem_retrieval` | 23,839 | 69 |
-| Stack Exchange | `stack_exchange` | 40,956 | 107 |
-
-  
+| Agent | Strategy |
+|-------|----------|
+| `baseline` | One chunk per document, raw text — performance floor |
+| `analysis_code_agent` | Iterative LLM agent with hypothesis-driven analysis loop |
+| `one_shot` | Single LLM call, no iteration |
+| `gemini_sdk` | Section-aware Wikipedia chunking with title propagation |
+| `lite_llm_agent` | Configurable via `config.yaml`; uses LiteLLM for provider-agnostic calls |
 
 ## Repository Structure
 
 ```
 llm_index_generation/
 ├── main.py                            # CLI entry point for running agents
-├── proposals.md                       # Design proposals and tradeoffs
+├── run_experiments.sh                 # Reproduces all ablation conditions
 ├── pyproject.toml
-├── data/                              # Pre-fetched corpus subset (generated, not committed)
-│   ├── documents.jsonl                # Wikipedia documents
-│   └── queries.jsonl                  # Eval queries (EvalQuery objects)
+├── data/                              # Downloaded corpus data (not committed)
+│   └── {split}/
+│       ├── documents.jsonl            # Full corpus documents
+│       ├── queries.jsonl              # Eval queries
+│       ├── gold_docs_cache.json       # Cached gold docs (shared across runs)
+│       └── distractors_seed{s}_size{n}.json  # Cached distractor sample
 └── src/
     ├── evaluation/                    # Static harness – DO NOT MODIFY
     │   ├── schema.py                  # Data classes: Document, Chunk, EvalQuery
     │   ├── base.py                    # BasePreprocessor ABC
     │   └── scripts/
-    |       └── aggregate_results.py             # Compare results across splits/agents                
-    │       ├── archive_agent_iterations.py # Archive old iterations
-    │       ├── build_index.py         # BM25 index builder (bm25s + English stemmer)
-    │       ├── cleanup_iterations.py  # Cleanup old iterations
     │       ├── get_data.py            # One-time data download from HuggingFace
-    │       ├── plot_iterations.py     # Creates plots for each split based on final results from each iteration
-    │       └── test_preprocessing_split.py  # Eval harness: Recall@k + MRR
+    │       ├── build_index.py         # BM25 index builder (bm25s + English stemmer)
+    │       ├── test_preprocessing_split.py  # Eval harness: Recall@k + nDCG
+    │       ├── aggregate_results.py   # Compare results across splits/agents
+    │       ├── plot_iterations.py     # Visualize metric improvement over iterations
+    │       ├── archive_agent_iterations.py  # Archive old iterations
+    │       └── cleanup_iterations.py  # Clean up old artifacts
     └── agents/
         ├── CONTEXT.md                 # Dataset and interface docs for agent prompts
-        ├── agent_runner.py            # Abstract base class for iterative LLM agents
-        ├── baseline_results.json      # Baseline eval numbers loaded by AgentRunner
+        ├── agent_runner.py            # Abstract base class for iterative agents
         ├── baseline/
         │   └── preprocess.py          # Passthrough reference implementation
-        ├── gemini_sdk/
-        │   ├── preprocess.py          # Wikipedia section-aware chunker (agent-generated)
-        │   ├── agent.py               # Gemini-backed iterative agent
-        │   └── context/
-        │       └── SYSTEM_INSTRUCTION.md  # System prompt template
-        └── lite_llm_agent/
-            ├── preprocess.py          # Agent preprocessor
-            ├── agent.py               # LiteLLM-backed iterative agent (supports test mode)
-            ├── config.yaml            # Model, temperature, and API settings
+        ├── analysis_code_agent/
+        │   ├── preprocess.py          # Agent preprocessor (reset to baseline before each run)
+        │   ├── agent.py               # Main iterative agent loop
+        │   ├── analysis_agent.py      # Hypothesis generation + corpus analysis
+        │   ├── code_agent.py          # Code rewriting from hypotheses
+        │   ├── one_shot_agent.py      # Single-call baseline variant
+        │   ├── config.yaml            # All tunable settings (see Config section)
+        │   └── context/               # System prompts and corpus descriptions
+        └── gemini_sdk/
+            ├── preprocess.py
+            ├── agent.py
             └── context/
-                └── SYSTEM_INSTRUCTION.md  # System prompt template
+                └── SYSTEM_INSTRUCTION.md
 ```
-
-## Background
-
-Split	Documents	Queries
-paper_retrieval	363,133	72
-tip_of_the_tongue	1,083,337	135
-clinical_trial	914,628	113
-code_retrieval	232,444	3,665
-legal_qa	1,182,626	6,753
-set_operation_entity_retrieval	651,704	423
-theorem_retrieval	23,839	69
-stack_exchange	40,956	107
-
-## Running Ablation Experiments
-
-To reproduce all ablation conditions (baseline, one-shot, agent, agent+history, agent+contrastive, agent+history+contrastive), run:
-
-```bash
-bash run_experiments.sh
-```
-
-This resets `preprocess.py` to the baseline before each condition to prevent result contamination. Results are saved to `results/`.
 
 ## Setup
 
 ```bash
-# Install dependencies
 uv sync
+```
 
-# Set up API keys in .env
-GOOGLE_API_KEY=...        # For Gemini agents
-LITELLM_API_KEY=...       # For LiteLLM agents
+Create a `.env` file at the project root:
+
+```
+GOOGLE_API_KEY=...        # for gemini_sdk
+LITE_LLM_KEY=...          # for analysis_code_agent / one_shot via UMass proxy
+```
 
 ## Downloading Data
 
-```bash
-# Install dependencies
-uv sync
-```
-
-## Download Data
-
-Download corpus + queries for CRUMB benchmark splits to `/data/`
-
-### Download Full Splits
-
-Download complete datasets (all documents + queries):
+Data is stored per-split under `data/{split}/`. Download before running:
 
 ```bash
 # Single split
-uv run python -m src.evaluation.scripts.get_data --split paper_retrieval
+uv run python -m src.evaluation.scripts.get_data --split tip_of_the_tongue
 
 # All splits
-for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
+for split in tip_of_the_tongue paper_retrieval clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
   uv run python -m src.evaluation.scripts.get_data --split $split
 done
+```
+
+On first run the agent streams and caches the corpus. Subsequent runs load from `gold_docs_cache.json` and `distractors_seed{s}_size{n}.json` — no re-download needed.
+
+## Running an Agent
+
+```bash
+# analysis_code_agent (main agent) — ablation conditions:
+uv run python main.py --agent analysis_code_agent --loops 5 --condition agent_history
+uv run python main.py --agent analysis_code_agent --loops 3 --condition agent
+uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_contrastive
+
+# One-shot baseline (single LLM call, no loop):
+uv run python main.py --agent one_shot --split tip_of_the_tongue
+
+# Override model and/or API base:
+uv run python main.py --agent analysis_code_agent --loops 3 --model gemini/gemini-2.5-pro
+uv run python main.py --agent one_shot --model openai/gpt4o --api-base https://thekeymaker.umass.edu/
+
+# Limit distractor corpus size:
+uv run python main.py --agent one_shot --max-distractors 5000
+
+# Other agents:
+uv run python main.py --agent gemini_sdk --loops 5
+uv run python main.py --agent lite_llm_agent --loops 5 --split paper_retrieval
+```
+
+## Config (`analysis_code_agent/config.yaml`)
+
+All tunable settings for `analysis_code_agent` and `one_shot`:
+
+```yaml
+analysis_model: "openai/claude-haiku-4-5"   # model for hypothesis/analysis calls
+code_model: "openai/claude-haiku-4-5"        # model for code generation
+api_base: "https://thekeymaker.umass.edu/"   # UMass LiteLLM proxy; null for native API
+
+server_port: 8765
+server_startup_timeout: 30        # seconds to wait for BM25 server; increase for large indexes
+preprocess_timeout_seconds: 120   # seconds per preprocess() call; increase for large corpora
+bm25_batch_size: 100000           # chunks per HTTP request to BM25 server
+
+corpus_size: 5000                 # null = full corpus; integer = reservoir-sample this many docs
+                                  # gold docs are always included; remainder sampled randomly
+max_distractors: 9000             # max non-relevant docs in subset (overridable via --max-distractors)
+max_hypotheses: 4
+analysis_max_turns: 4
+use_tools: true                   # set false for models without tool-calling support
+```
+
+## Running Ablation Experiments
+
+```bash
+# Default: runs agent_history on tip_of_the_tongue
+bash run_experiments.sh
+
+# Different split or distractor count:
+bash run_experiments.sh --split paper_retrieval
+bash run_experiments.sh --max-distractors 5000
+
+# Override model:
+bash run_experiments.sh --model gemini/gemini-2.5-pro
+bash run_experiments.sh --model openai/gpt4o --api-base https://thekeymaker.umass.edu/
+```
+
+Resets `preprocess.py` to baseline before each condition. Results saved to `results/` and `ablation_experiments/`.
 
 ## Running Evaluations
 
+```bash
+# Evaluate a preprocessor directly
+uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline --split tip_of_the_tongue
+uv run python -m src.evaluation.scripts.test_preprocessing_split --agent analysis_code_agent --split paper_retrieval --top-k 20
+
+# Aggregate results across all runs
+uv run python -m src.evaluation.scripts.aggregate_results
+uv run python -m src.evaluation.scripts.aggregate_results --split paper_retrieval
+uv run python -m src.evaluation.scripts.aggregate_results --export all_results.csv
+
+# Plot iteration progress for an experiment
+uv run python -m src.evaluation.scripts.plot_iterations --agent analysis_code_agent --split tip_of_the_tongue
 ```
-# Basic evaluation
-uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline --split paper_retrieval
 
-# With comparison to previous runs
-uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline --split paper_retrieval --compare
-
-# Custom top-k
-uv run python -m src.evaluation.scripts.test_preprocessing_split --agent lite_llm_agent --split code_retrieval --top-k 20
-
-# List available splits
-uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline
-```
-
-## Comparing Aggregate Results
-Metrics are based on recall!
+## Metrics
 
 | Metric | Description |
 |--------|-------------|
 | Recall@k | Fraction of queries where a relevant doc appears in the top-k results |
-| MRR | Mean Reciprocal Rank — average of 1/rank for the first relevant result |
+| nDCG@k | Normalized Discounted Cumulative Gain at rank k |
+| MRR | Mean Reciprocal Rank |
 
 The retriever is BM25 (`bm25s`) with an English Snowball stemmer. Agents cannot modify the retriever.
-
-
-```
-# View all results
-uv run python -m src.evaluation.scripts.aggregate_results
-
-# Filter by split
-uv run python -m src.evaluation.scripts.aggregate_results --split paper_retrieval
-
-# Filter by agent
-uv run python -m src.evaluation.scripts.aggregate_results --agent baseline
-
-# Group by split
-uv run python -m src.evaluation.scripts.aggregate_results --by-split
-
-# Export to CSV
-uv run python -m src.evaluation.scripts.aggregate_results --export all_results.csv
-```
-
-
-## Running an Agent
-
-Requires a `.env` file with API keys for the relevant agent:
-- `GOOGLE_API_KEY` — for `gemini_sdk`
-- `LITELLM_API_KEY` — for `lite_llm_agent` / `test_agent` (or configure via `lite_llm_agent/config.yaml`)
-
-Run an iterative LLM agent (eval → improve loop):
-
-```bash
-uv run python -m main --agent gemini_sdk --loops 5
-uv run python -m main --agent lite_llm_agent --loops 5
-
-# If the LLM provider's safety filters block dataset content, omit raw query text from prompts:
-uv run python -m main --agent gemini_sdk --loops 5 --no-query-text
-
-# Enable MLflow tracing for LiteLLM calls (lite_llm_agent only):
-uv run python -m main --agent lite_llm_agent --loops 5 --enable_tracing
-
-# Dry-run with a mock LLM response (no API calls, useful for testing the pipeline):
-uv run python -m main --agent test_agent --loops 1
-```
-
-The agent evaluates the current `preprocess.py`, builds a prompt with per-query feedback (misses, ranks, metrics), calls the LLM, extracts the updated code, and repeats. `--no-query-text` strips the raw query strings from that feedback while preserving query IDs, doc IDs, and rank signals. `--enable_tracing` enables MLflow auto-logging for LiteLLM calls via `mlflow.litellm.autolog()` — only supported for `lite_llm_agent`. `test_agent` uses `LiteLLMAgent` with `test_mode=True`, which injects a mock response instead of making a real API call — useful for validating the pipeline without incurring API costs.
-
-## Seeing Traces
-Run the following to see traces recorded when `--enable_tracing` is used with `lite_llm_agent`:
-
-```bash
-uv run mlflow ui
-```
 
 ## Agent Interface
 
@@ -243,105 +223,10 @@ class Preprocessor(BasePreprocessor):
         ...
 ```
 
-Agents can create any additional files within their own folder.
-
-## Adding a New Agent
-
-1. Create `src/agents/<name>/preprocess.py` with a `Preprocessor` class (see interface above)
-2. Optionally add an `agent.py` subclassing `AgentRunner` for the iterative loop
-3. Evaluate: `uv run python -m src.evaluation.scripts.test_preprocessing --agent <name>`
-
 ## Conventions
 
 - Use `uv add <package>` to add dependencies, never `pip install`
 - Never modify anything in `src/evaluation/` — it is the static ground truth
 - Agent code stays entirely within `src/agents/<name>/`
 - `data/` is generated; run `get_data.py` to populate it
-- Update `src/agents/baseline_results.json` whenever baseline numbers change (e.g. after re-running with a different dataset size); `AgentRunner` loads this file at runtime
 
-## Quick Run
-
-Download datasets
-```
-for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
-  echo "Downloading $split..."
-  uv run python -m src.evaluation.scripts.get_data_extended --split $split
-done
-```
-
-Baselines
-```
-for split in paper_retrieval tip_of_the_tongue clinical_trial code_retrieval legal_qa set_operation_entity_retrieval theorem_retrieval stack_exchange; do
-  echo "Evaluating baseline on $split..."
-  uv run python -m src.evaluation.scripts.test_preprocessing_split --agent baseline --split $split
-done
-```
-
-# Evaluation Scripts
-
-Utilities for managing, visualizing, and cleaning up agent evaluation artifacts.
-
-## Overview
-
-These scripts help you manage the full lifecycle of agent experiments:
-- **Run evaluations** → `test_preprocessing_split.py`
-- **Visualize results** → `plot_iterations.py`
-- **Archive code** → `archive_agent_iterations.py`
-- **Clean up artifacts** → `cleanup_iterations.py`
-
----
-
-## Scripts
-
-### 1. `test_preprocessing_split.py`
-
-**Purpose:** Main evaluation harness for testing preprocessing agents on CRUMB benchmark splits.
-
-**Features:**
-- Runs BM25 retrieval with preprocessed documents
-- Computes quick metrics (Recall@k, nDCG@k)
-- Calls official CRUMB eval library for benchmark metrics
-- Tracks iterations when called from agent runner
-- Saves multiple output formats (JSON, CRUMB JSONL, query results)
-
-
-## Visualizing Iteration Results
-
-### Plot Agent Progress Over Iterations
-
-The `plot_iterations.py` script creates visualizations showing how metrics improve over agent iterations, styled like autonomous ML research plots.
-
-
-**Usage:**
-
-```bash
-# Basic evaluation
-python -m src.evaluation.scripts.test_preprocessing_split \
-  --agent baseline \
-  --split paper_retrieval
-
-# With comparison to previous runs
-python -m src.evaluation.scripts.test_preprocessing_split \
-  --agent lite_llm_agent \
-  --split code_retrieval \
-  --compare
-
-# Custom top-k
-python -m src.evaluation.scripts.test_preprocessing_split \
-  --agent baseline \
-  --split tip_of_the_tongue \
-  --top-k 20
-
-# List available splits
-python -m src.evaluation.scripts.test_preprocessing_split --agent baseline
-
-
-
-Quick Reference
-Task	Command
-Download data	python -m src.evaluation.scripts.get_data_extended --split <split>
-Evaluate agent	python -m src.evaluation.scripts.test_preprocessing_split --agent <agent> --split <split>
-Plot iterations	python -m src.evaluation.scripts.plot_iterations --agent <agent> --split <split>
-Archive code	python -m src.evaluation.scripts.archive_agent_iterations --agent <agent> --clear
-Clean results	python -m src.evaluation.scripts.cleanup_iterations --split <split> --agent <agent>
-Compare all	python -m src.evaluation.scripts.aggregate_results
