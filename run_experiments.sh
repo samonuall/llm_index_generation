@@ -6,6 +6,7 @@
 #   bash run_experiments.sh --split paper_retrieval                                # different subset
 #   bash run_experiments.sh --split clinical_trial --model gemini/gemini-2.5-pro  # different subset + model
 #   bash run_experiments.sh --model openai/gpt4o --api-base https://thekeymaker.umass.edu/
+#   bash run_experiments.sh --max-distractors 5000                                 # limit distractor docs
 #
 # Available --split values (must download data first):
 #   tip_of_the_tongue            uv run python src/evaluation/scripts/get_data.py --split tip_of_the_tongue
@@ -19,32 +20,51 @@
 
 set -euo pipefail
 
-BASELINE_PREPROCESS="src/agents/baseline/preprocess.py"
-AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
+show_help() {
+    cat <<EOF
+Usage: $0 [--split NAME] [--max-distractors N] [--model MODEL] [--api-base URL]
 
-# Parse flags
+--split            Split name (default: tip_of_the_tongue)
+--max-distractors  Max non-relevant docs to sample (default: 9000)
+--model            Model identifier (e.g., openai/gpt4o)
+--api-base         API base URL
+EOF
+}
+
+# defaults
 SPLIT="tip_of_the_tongue"
-MODEL_ARGS=""
+MAX_DISTRACTORS="9000"
+MODEL_ARGS_ARRAY=()
+
+# parse args
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --split)
             SPLIT="$2"
             shift 2
             ;;
+        --max-distractors)
+            MAX_DISTRACTORS="$2"; shift 2
+            ;;
         --model)
-            MODEL_ARGS="$MODEL_ARGS --model $2"
-            shift 2
+            MODEL_ARGS_ARRAY+=("--model" "$2"); shift 2
             ;;
         --api-base)
-            MODEL_ARGS="$MODEL_ARGS --api-base $2"
-            shift 2
+            MODEL_ARGS_ARRAY+=("--api-base" "$2"); shift 2
+            ;;
+        --help|-h)
+            show_help; exit 0
             ;;
         *)
             echo "Unknown argument: $1"
+            show_help
             exit 1
             ;;
     esac
 done
+
+BASELINE_PREPROCESS="src/agents/baseline/preprocess.py"
+AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
 
 # Check data is downloaded
 if [ ! -f "data/${SPLIT}/documents.jsonl" ] || [ ! -f "data/${SPLIT}/queries.jsonl" ]; then
@@ -78,18 +98,19 @@ reset_preprocess() {
 }
 
 run_experiment() {
-    local label="$1"
-    shift
+    local label="$1"; shift
+    local extra_args=("$@")
     echo ""
     echo "=============================================="
     echo "  RUNNING: $label  [split=${SPLIT}]"
     echo "=============================================="
     cleanup_port
     reset_preprocess
-    uv run python main.py --split "$SPLIT" "$@" $MODEL_ARGS
+
+    uv run python main.py "${extra_args[@]}" --split "$SPLIT" --max-distractors "$MAX_DISTRACTORS" "${MODEL_ARGS_ARRAY[@]}"
+
     echo ">>> Done: $label"
 
-    # Generate plots for this experiment (ok if it fails)
     LATEST_DIR=$(ls -td ablation_experiments/*_${label}_* 2>/dev/null | head -1)
     if [ -n "$LATEST_DIR" ]; then
         echo ">>> Generating plots for $LATEST_DIR ..."

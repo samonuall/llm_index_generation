@@ -85,6 +85,13 @@ def main() -> None:
         dest="api_base",
         help="Override API base URL (omit to use provider default, e.g. for native Gemini API)",
     )
+    parser.add_argument(
+        "--max-distractors",
+        type=int,
+        default=9000,
+        help="Max non-relevant docs to sample"
+    )
+
     args = parser.parse_args()
 
     if args.agent == "gemini_sdk":
@@ -107,9 +114,10 @@ def main() -> None:
         use_history = args.condition in ("agent_history", "agent_contrastive")
         use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
         agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive, model=args.model, api_base=args.api_base)
+    
     elif args.agent == "one_shot":
         from src.agents.analysis_code_agent.one_shot_agent import run_one_shot
-        run_one_shot(split=args.split, model=args.model, api_base=args.api_base)
+        run_one_shot(split=args.split, model=args.model, api_base=args.api_base, max_distractors=args.max_distractors)
         return
 
     elif args.agent == "baseline":
