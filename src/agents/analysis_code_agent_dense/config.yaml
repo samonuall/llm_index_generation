@@ -15,6 +15,7 @@ embedding_api_key: "EMPTY"                        # set to your key if the endpo
 embedding_dim: null                               # null = auto-detect from first response
 embedding_batch_size: 32                          # texts per embeddings call
 embedding_max_chars: 20000                        # truncate texts longer than this before embedding
+embedding_max_tokens: 8000                        # 0 disables; required for openai endpoints with an 8192-token input cap
 embedding_timeout: 120                            # per-request timeout (seconds) for the simple format
 # Qwen3 recommends prepending task instructions ONLY to queries (not to documents):
 query_instruction: "Given a web search query, retrieve relevant passages that answer the query."

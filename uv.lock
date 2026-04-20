@@ -1524,6 +1524,7 @@ dependencies = [
     { name = "pystemmer" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "tiktoken" },
     { name = "tqdm" },
     { name = "uvicorn" },
 ]
@@ -1548,6 +1549,7 @@ requires-dist = [
     { name = "pystemmer", specifier = ">=3.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "tiktoken", specifier = ">=0.8.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]

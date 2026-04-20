@@ -155,7 +155,8 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
         for line in f:
             d = json.loads(line)
             doc = Document(doc_id=d["doc_id"], text=d["text"], metadata=d.get("metadata", {}))
-            if doc.doc_id in gold_doc_ids:
+            base_id = doc.doc_id.split(":", 1)[0]
+            if base_id in gold_doc_ids:
                 gold_docs.append(doc)
             else:
                 if n_non_gold_seen < target_non_gold:
@@ -384,6 +385,7 @@ class AnalysisCodeAgent(AgentRunner):
             "--embedding-api-key", self._config.get("embedding_api_key", "EMPTY"),
             "--embedding-batch-size", str(self._config.get("embedding_batch_size", 32)),
             "--embedding-max-chars", str(self._config.get("embedding_max_chars", 20000)),
+            "--embedding-max-tokens", str(self._config.get("embedding_max_tokens", 0) or 0),
             "--embedding-format", self._config.get("embedding_format", "openai"),
             "--embedding-timeout", str(self._config.get("embedding_timeout", 120.0)),
             "--query-instruction", self._config.get(

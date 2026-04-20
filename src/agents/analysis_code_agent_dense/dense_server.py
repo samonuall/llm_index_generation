@@ -74,7 +74,36 @@ _embed_timeout: float = 120.0
 _embed_model: str = ""
 _embed_batch_size: int = 32
 _embed_max_chars: int = 20000
+_embed_max_tokens: int = 0          # 0 = disabled; otherwise token-level truncation cap
 _query_instruction: str = ""
+
+# Lazily-initialized tiktoken encoder used when _embed_max_tokens > 0.
+_token_encoder = None
+
+
+def _get_token_encoder():
+    """Return a tiktoken encoder, lazily initialized on first use.
+
+    Tries the exact embedding model first (handles OpenAI ada/3-small/3-large),
+    falls back to cl100k_base, which is a reasonable approximation for most
+    OpenAI-compatible endpoints (incl. vLLM). If tiktoken itself is unavailable
+    we return None and the caller falls back to char-level truncation.
+    """
+    global _token_encoder
+    if _token_encoder is not None:
+        return _token_encoder
+    try:
+        import tiktoken
+    except Exception:
+        return None
+    try:
+        _token_encoder = tiktoken.encoding_for_model(_embed_model)
+    except Exception:
+        try:
+            _token_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _token_encoder = None
+    return _token_encoder
 
 
 # ---- Request / response models ----
@@ -117,8 +146,32 @@ class BatchRetrieveRequest(BaseModel):
 # ---- Embedding helpers ----
 
 def _prep_text(text: str) -> str:
+    """Truncate text before sending to the embedding endpoint.
+
+    Order of operations:
+      1. Char-level cap (fast; primarily to keep HTTP payloads reasonable).
+      2. Token-level cap (only when _embed_max_tokens > 0). This is the one
+         that matters for OpenAI-compatible endpoints with a hard input-token
+         limit (e.g. 8192 for text-embedding-3-*, or some vLLM deployments of
+         Qwen3-Embedding configured with a short max_model_len). If tiktoken
+         cannot tokenize, we fall back to an aggressive char-based estimate
+         (~3 chars/token) so we still stay under the model's limit.
+    """
     if _embed_max_chars and len(text) > _embed_max_chars:
-        return text[:_embed_max_chars]
+        text = text[:_embed_max_chars]
+    if _embed_max_tokens and _embed_max_tokens > 0:
+        enc = _get_token_encoder()
+        if enc is not None:
+            try:
+                tokens = enc.encode(text, disallowed_special=())
+            except TypeError:
+                tokens = enc.encode(text)
+            if len(tokens) > _embed_max_tokens:
+                text = enc.decode(tokens[:_embed_max_tokens])
+        else:
+            approx_chars = _embed_max_tokens * 3
+            if len(text) > approx_chars:
+                text = text[:approx_chars]
     return text
 
 
@@ -521,6 +574,16 @@ if __name__ == "__main__":
     parser.add_argument("--embedding-batch-size", type=int, default=32)
     parser.add_argument("--embedding-max-chars", type=int, default=20000)
     parser.add_argument(
+        "--embedding-max-tokens",
+        type=int,
+        default=int(os.environ.get("EMBEDDING_MAX_TOKENS", "0")),
+        help=(
+            "If > 0, truncate each input to this many tokens before calling the "
+            "embedding endpoint. Required for OpenAI-format endpoints whose model "
+            "has a hard input-token cap (e.g. 8192)."
+        ),
+    )
+    parser.add_argument(
         "--embedding-format",
         type=str,
         choices=["openai", "simple"],
@@ -553,6 +616,7 @@ if __name__ == "__main__":
     _embed_model = args.embedding_model
     _embed_batch_size = args.embedding_batch_size
     _embed_max_chars = args.embedding_max_chars
+    _embed_max_tokens = args.embedding_max_tokens
     _query_instruction = args.query_instruction
 
     if _embed_format == "openai":
@@ -568,6 +632,7 @@ if __name__ == "__main__":
     print(
         f"[server] Dense server starting on port {args.port} — "
         f"format={_embed_format}, embedding endpoint={args.embedding_endpoint}, "
-        f"model={_embed_model}, batch_size={_embed_batch_size}"
+        f"model={_embed_model}, batch_size={_embed_batch_size}, "
+        f"max_chars={_embed_max_chars}, max_tokens={_embed_max_tokens or 'off'}"
     )
     uvicorn.run(app, host="0.0.0.0", port=args.port)
