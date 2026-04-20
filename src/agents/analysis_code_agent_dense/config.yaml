@@ -1,0 +1,36 @@
+analysis_model: "openai/claude-haiku-4-5"
+analysis_temperature: 0.6
+code_model: "openai/claude-haiku-4-5"
+code_temperature: 1.0
+api_base: "https://thekeymaker.umass.edu/"
+
+# ---- Dense retrieval (Qwen3 embedding endpoint) ----
+# Two wire formats are supported via `embedding_format`:
+#   openai — POST {embedding_endpoint}/embeddings, body {"model","input":[...]}, resp data[i].embedding
+#   simple — POST {embedding_endpoint}, body {"texts":[...]}, resp {"embeddings":[[...], ...]}
+embedding_format: "simple"                        # "openai" or "simple"
+embedding_endpoint: "https://tux-engaged-errant.ngrok-free.dev/embed"   # URL for the Qwen3 embedding server
+embedding_model: "Qwen/Qwen3-Embedding-8B"       # model id the endpoint expects (ignored for "simple")
+embedding_api_key: "EMPTY"                        # set to your key if the endpoint requires auth
+embedding_dim: null                               # null = auto-detect from first response
+embedding_batch_size: 32                          # texts per embeddings call
+embedding_max_chars: 20000                        # truncate texts longer than this before embedding
+embedding_timeout: 120                            # per-request timeout (seconds) for the simple format
+# Qwen3 recommends prepending task instructions ONLY to queries (not to documents):
+query_instruction: "Given a web search query, retrieve relevant passages that answer the query."
+
+server_port: 8765
+server_persist_dir: ".dense_cache"
+server_startup_timeout: 60       # seconds to wait for dense server to be ready
+preprocess_timeout_seconds: 120  # seconds allowed for preprocess() per hypothesis
+dense_batch_size: 10000          # chunks per HTTP request to the dense server (build/append)
+
+corpus_size: 5000                # null = full corpus; set to integer (e.g. 5000) to reservoir-sample that many docs
+                                 # gold docs (referenced by any query) are always included; remainder is sampled randomly
+
+max_hypotheses: 4
+max_distractors: 9000     # relevant docs + this many distractors = ~10K corpus; remove to use full corpus
+recall_improvement_threshold: 0.00001
+analysis_max_turns: 4
+min_tool_turns: 3
+use_tools: true                  # set to false for models that don't support tool-calling (e.g. gemma)

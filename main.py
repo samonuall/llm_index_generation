@@ -31,7 +31,9 @@ def main() -> None:
             "lite_llm_agent",
             "test_agent",
             "analysis_code_agent",
+            "analysis_code_agent_dense",
             "one_shot",
+            "one_shot_dense",
             "baseline",
             "ai_assistant",
         ],
@@ -91,6 +93,27 @@ def main() -> None:
         default=9000,
         help="Max non-relevant docs to sample"
     )
+    parser.add_argument(
+        "--embedding-format", "--embedding_format",
+        dest="embedding_format",
+        type=str,
+        choices=["openai", "simple"],
+        default=None,
+        help=(
+            "Wire format for the dense-retrieval embedding endpoint "
+            "(analysis_code_agent_dense / one_shot_dense). "
+            "'openai' => POST {endpoint}/embeddings with {model,input}; "
+            "'simple' => POST {endpoint} with {texts:[...]} expecting {embeddings:[...]}. "
+            "Overrides embedding_format in config.yaml."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-endpoint", "--embedding_endpoint",
+        dest="embedding_endpoint",
+        type=str,
+        default=None,
+        help="Override embedding_endpoint from config.yaml (dense agents only).",
+    )
 
     args = parser.parse_args()
 
@@ -114,10 +137,28 @@ def main() -> None:
         use_history = args.condition in ("agent_history", "agent_contrastive")
         use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
         agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive, model=args.model, api_base=args.api_base)
-    
+
+    elif args.agent == "analysis_code_agent_dense":
+        from src.agents.analysis_code_agent_dense import AnalysisCodeAgent as DenseAnalysisCodeAgent
+        use_history = args.condition in ("agent_history", "agent_contrastive")
+        use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
+        agent = DenseAnalysisCodeAgent(
+            use_history=use_history,
+            use_contrastive=use_contrastive,
+            model=args.model,
+            api_base=args.api_base,
+            embedding_format=args.embedding_format,
+            embedding_endpoint=args.embedding_endpoint,
+        )
+
     elif args.agent == "one_shot":
         from src.agents.analysis_code_agent.one_shot_agent import run_one_shot
         run_one_shot(split=args.split, model=args.model, api_base=args.api_base, max_distractors=args.max_distractors)
+        return
+
+    elif args.agent == "one_shot_dense":
+        from src.agents.analysis_code_agent_dense.one_shot_agent import run_one_shot as run_one_shot_dense
+        run_one_shot_dense(split=args.split, model=args.model, api_base=args.api_base, max_distractors=args.max_distractors)
         return
 
     elif args.agent == "baseline":
