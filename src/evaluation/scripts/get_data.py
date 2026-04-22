@@ -17,6 +17,21 @@ from typing import Dict, List, Optional
 from datasets import load_dataset
 from tqdm import tqdm
 
+SPLITS_JSON = Path(__file__).parents[3] / "query_splits.json"
+
+
+def _apply_split(all_queries: List[Dict], split: str) -> tuple[List[Dict], List[Dict]]:
+    """Partition queries using query_splits.json; falls back to 1:5 positional split."""
+    if SPLITS_JSON.exists():
+        config = json.loads(SPLITS_JSON.read_text())
+        if split in config:
+            by_id = {q["query_id"]: q for q in all_queries}
+            val = [by_id[qid] for qid in config[split]["validation"] if qid in by_id]
+            evl = [by_id[qid] for qid in config[split]["evaluation"] if qid in by_id]
+            return val, evl
+    n_val = max(1, len(all_queries) // 6)
+    return all_queries[:n_val], all_queries[n_val:]
+
 SPLIT_MAP = {
     "tip_of_the_tongue":              "tip_of_the_tongue",
     "paper_retrieval":                "paper_retrieval",
@@ -43,17 +58,18 @@ def load_queries(split: str, n_queries: int = None) -> tuple[List[Dict], List[Di
     val_cache_file = cache_dir / "validation_queries.jsonl"
     eval_cache_file = cache_dir / "evaluation_queries.jsonl"
 
-    def _load_split(split_name: str, cache_file: Path) -> List[Dict]:
-        if cache_file.exists():
-            print(f"✓ Loading cached {split_name} from {cache_file}")
-            with cache_file.open("r") as f:
-                queries = [json.loads(line) for line in f]
-            print(f"  Loaded {len(queries)} queries")
+    # Fast path: both cache files exist
+    if val_cache_file.exists() and eval_cache_file.exists():
+        def _read(f: Path) -> List[Dict]:
+            queries = [json.loads(line) for line in f.read_text().splitlines() if line]
+            print(f"✓ Loading cached {f.name} from {f}  ({len(queries)} queries)")
             return queries
+        return _read(val_cache_file), _read(eval_cache_file)
 
-        print(f"Downloading {split_name} for {split}...")
-        dataset = load_dataset("jfkback/crumb", split_name, split=crumb_name)
-
+    # Download path: fetch both CRUMB splits, pool, then apply our split JSON
+    def _download_crumb_split(crumb_split_name: str) -> List[Dict]:
+        print(f"Downloading {crumb_split_name} for {split}...")
+        dataset = load_dataset("jfkback/crumb", crumb_split_name, split=crumb_name)
         queries = []
         for item in dataset:
             qrels = item.get("full_document_qrels") or item.get("passage_qrels") or []
@@ -64,20 +80,33 @@ def load_queries(split: str, n_queries: int = None) -> tuple[List[Dict], List[Di
                     "query_content": item["query_content"],
                     "relevant_doc_ids": relevant_ids,
                 })
-
-        if n_queries and n_queries < len(queries):
-            queries = queries[:n_queries]
-
-        print(f"Caching {len(queries)} {split_name} to {cache_file}")
-        with cache_file.open("w") as f:
-            for q in queries:
-                f.write(json.dumps(q) + "\n")
-
         return queries
 
-    val_queries = _load_split("validation_queries", val_cache_file)
-    eval_queries = _load_split("evaluation_queries", eval_cache_file)
-    
+    all_queries: List[Dict] = []
+    for crumb_split_name in ("validation_queries", "evaluation_queries"):
+        all_queries += _download_crumb_split(crumb_split_name)
+
+    # Dedup, then apply the hardcoded split
+    seen: dict = {}
+    for q in all_queries:
+        seen[q["query_id"]] = q
+    all_queries = list(seen.values())
+
+    if n_queries and n_queries < len(all_queries):
+        all_queries = all_queries[:n_queries]
+
+    val_queries, eval_queries = _apply_split(all_queries, split)
+
+    print(f"Caching {len(val_queries)} validation_queries to {val_cache_file}")
+    with val_cache_file.open("w") as f:
+        for q in val_queries:
+            f.write(json.dumps(q) + "\n")
+
+    print(f"Caching {len(eval_queries)} evaluation_queries to {eval_cache_file}")
+    with eval_cache_file.open("w") as f:
+        for q in eval_queries:
+            f.write(json.dumps(q) + "\n")
+
     return val_queries, eval_queries
 
 
