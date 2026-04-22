@@ -461,7 +461,7 @@ class AnalysisAgent:
             f"1. **bm25_retrieve(query, top_k=10)** — "
             f"Query the current BM25 index. Returns doc_id, score, rank for each result.\n"
             f"2. **read_file(file_path, max_chars=800, filter_id=None)** — "
-            f"Read a file from data/{split}/. file_path is relative (e.g. \"documents.jsonl\"). "
+            f"Read a file from data/{split}/. file_path is relative (e.g. \"documents.jsonl\" or \"validation_queries.jsonl\"). "
             f"Use filter_id to look up a specific doc_id or query_id in JSONL files.\n"
             f"3. **grep_search(pattern, file_path, max_results=10)** — "
             f"Regex search within a data file. file_path is relative to data/{split}/.\n\n"

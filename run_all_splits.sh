@@ -52,7 +52,7 @@ for SPLIT in "${SPLITS[@]}"; do
     echo "=============================================="
 
     # Check data is downloaded
-    if [ ! -f "data/${SPLIT}/documents.jsonl" ] || [ ! -f "data/${SPLIT}/queries.jsonl" ]; then
+    if [ ! -f "data/${SPLIT}/documents.jsonl" ] || [ ! -f "data/${SPLIT}/validation_queries.jsonl" ] || [ ! -f "data/${SPLIT}/evaluation_queries.jsonl" ]; then
         echo "  SKIP — data not found. Download with:"
         echo "    uv run python src/evaluation/scripts/get_data.py --split ${SPLIT}"
         FAILED+=("${SPLIT} (no data)")

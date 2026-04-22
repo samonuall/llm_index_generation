@@ -31,6 +31,9 @@ def _validate_path(split: str, file_path: str) -> pathlib.Path | str:
 
     Returns an error string instead of a Path when the request is invalid.
     """
+    if file_path == "queries.jsonl" or file_path == "evaluation_queries.jsonl":
+        return "Error: Access to evaluation queries is forbidden. Use 'validation_queries.jsonl' instead."
+
     base_dir = (_PROJECT_ROOT / "data" / split).resolve()
     target = (base_dir / file_path).resolve()
 

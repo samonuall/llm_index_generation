@@ -67,7 +67,7 @@ BASELINE_PREPROCESS="src/agents/baseline/preprocess.py"
 AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
 
 # Check data is downloaded
-if [ ! -f "data/${SPLIT}/documents.jsonl" ] || [ ! -f "data/${SPLIT}/queries.jsonl" ]; then
+if [ ! -f "data/${SPLIT}/documents.jsonl" ] || [ ! -f "data/${SPLIT}/validation_queries.jsonl" ] || [ ! -f "data/${SPLIT}/evaluation_queries.jsonl" ]; then
     echo "ERROR: data/${SPLIT}/ not found."
     echo "Download it first with:"
     echo "  uv run python src/evaluation/scripts/get_data.py --split ${SPLIT}"
@@ -77,7 +77,7 @@ fi
 echo ""
 echo "=============================================="
 echo "  CRUMB split : ${SPLIT}"
-echo "  $(wc -l < data/${SPLIT}/queries.jsonl) queries, $(wc -l < data/${SPLIT}/documents.jsonl | tr -d ' ') docs cached"
+echo "  $(wc -l < data/${SPLIT}/validation_queries.jsonl) val queries, $(wc -l < data/${SPLIT}/evaluation_queries.jsonl) eval queries, $(wc -l < data/${SPLIT}/documents.jsonl | tr -d ' ') docs cached"
 echo "=============================================="
 
 cleanup_port() {

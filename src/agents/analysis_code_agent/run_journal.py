@@ -19,13 +19,16 @@ from typing import Optional
 @dataclass
 class IterationRecord:
     iteration: int
-    recall_at_100: float
-    ndcg_at_10: float
-    recall_at_10: float
+    recall_at_100: float          # validation set
+    ndcg_at_10: float             # validation set
+    recall_at_10: float           # validation set
     n_queries: int
     hit_query_ids: list[str] = field(default_factory=list)
     miss_query_ids: list[str] = field(default_factory=list)
     adopted_hypothesis_id: Optional[str] = None
+    eval_recall_at_100: Optional[float] = None   # held-out eval set
+    eval_ndcg_at_10: Optional[float] = None      # held-out eval set
+    eval_recall_at_10: Optional[float] = None    # held-out eval set
 
 
 @dataclass
@@ -63,27 +66,32 @@ class RunJournal:
         self,
         iteration: int,
         eval_results: dict,
+        eval_results_harness: dict | None = None,
         adopted_hypothesis_id: Optional[str] = None,
     ) -> None:
         """Record the eval state at the start of a loop.
 
-        eval_results must be the enriched dict from agent._enrich_eval_results(),
-        which contains query_results with 'hit' (= hit@100), 'rank', 'query_id'.
+        eval_results: enriched val-set results from agent._enrich_eval_results()
+        eval_results_harness: raw harness results from eval_queries (held-out set)
         """
         query_results = eval_results.get("query_results", [])
         hit_ids = [r["query_id"] for r in query_results if r.get("hit")]
         miss_ids = [r["query_id"] for r in query_results if not r.get("hit")]
 
-        metrics = eval_results.get("metrics", {})
+        val_metrics = eval_results.get("metrics", {})
+        eval_m = eval_results_harness.get("metrics", {}) if eval_results_harness else {}
         rec = IterationRecord(
             iteration=iteration,
-            recall_at_100=metrics.get("recall_at_100", 0.0),
-            ndcg_at_10=metrics.get("ndcg_at_10", 0.0),
-            recall_at_10=metrics.get("recall_at_10", 0.0),
+            recall_at_100=val_metrics.get("recall_at_100", 0.0),
+            ndcg_at_10=val_metrics.get("ndcg_at_10", 0.0),
+            recall_at_10=val_metrics.get("recall_at_10", 0.0),
             n_queries=len(query_results),
             hit_query_ids=hit_ids,
             miss_query_ids=miss_ids,
             adopted_hypothesis_id=adopted_hypothesis_id,
+            eval_recall_at_100=eval_m.get("recall_at_100"),
+            eval_ndcg_at_10=eval_m.get("ndcg_at_10"),
+            eval_recall_at_10=eval_m.get("recall_at_10"),
         )
         self.iterations.append(rec)
         self.save()
@@ -266,6 +274,10 @@ class RunJournal:
         path = run_dir / "run_journal.json"
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
-            journal.iterations = [IterationRecord(**r) for r in data.get("iterations", [])]
+            valid_fields = {f.name for f in IterationRecord.__dataclass_fields__.values()}
+            journal.iterations = [
+                IterationRecord(**{k: v for k, v in r.items() if k in valid_fields})
+                for r in data.get("iterations", [])
+            ]
             journal.hypotheses = [HypothesisRecord(**r) for r in data.get("hypotheses", [])]
         return journal
