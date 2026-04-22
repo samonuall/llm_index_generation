@@ -461,7 +461,7 @@ class AnalysisAgent:
             f"1. **bm25_retrieve(query, top_k=10)** — "
             f"Query the current BM25 index. Returns doc_id, score, rank for each result.\n"
             f"2. **read_file(file_path, max_chars=800, filter_id=None)** — "
-            f"Read a file from data/{split}/. file_path is relative (e.g. \"documents.jsonl\"). "
+            f"Read a file from data/{split}/. file_path is relative (e.g. \"documents.jsonl\" or \"validation_queries.jsonl\"). "
             f"Use filter_id to look up a specific doc_id or query_id in JSONL files.\n"
             f"3. **grep_search(pattern, file_path, max_results=10)** — "
             f"Regex search within a data file. file_path is relative to data/{split}/.\n\n"
@@ -469,9 +469,14 @@ class AnalysisAgent:
             f"When done investigating, wrap your final analysis in <summary>...</summary> tags.\n"
         )
 
+        n_val = len(eval_results.get("query_results", []))
         return (
             f"{journal_section}"
-            f"## Current Evaluation\n"
+            f"## Current Evaluation (validation set — {n_val} queries)\n"
+            f"> Note: these metrics are on a small validation set. Hypotheses adopted here will be\n"
+            f"> tested on a separate held-out eval set (~135 queries) that is never used to guide\n"
+            f"> decisions. Prioritise generalizable strategies over fixes for specific val queries.\n"
+            f"\n"
             f"- Recall@100: {recall_100:.4f} (baseline: {baseline_recall:.4f})\n"
             f"- nDCG@10: {ndcg_10:.4f} (baseline: {baseline_ndcg:.4f})\n"
             f"\n"

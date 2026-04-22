@@ -61,6 +61,19 @@ def _load_documents(split: str = None) -> tuple[List[Document], str]:
 def _load_queries(split: str = None) -> tuple[List[EvalQuery], str]:
     """Load queries from split-specific cache, or fallback to default."""
     if split:
+        queries_file = DATA_DIR / split / "evaluation_queries.jsonl"
+        if queries_file.exists():
+            queries = []
+            with queries_file.open(encoding="utf-8") as f:
+                for line in f:
+                    q = json.loads(line)
+                    queries.append(EvalQuery(
+                        query_id=q['query_id'],
+                        query_text=q['query_content'] if 'query_content' in q else q.get('query_text', ''),
+                        relevant_doc_ids=q['relevant_doc_ids']
+                    ))
+            return queries, split
+        # Fallback to queries.jsonl for older datasets
         queries_file = DATA_DIR / split / "queries.jsonl"
         if queries_file.exists():
             queries = []
@@ -69,10 +82,18 @@ def _load_queries(split: str = None) -> tuple[List[EvalQuery], str]:
                     q = json.loads(line)
                     queries.append(EvalQuery(
                         query_id=q['query_id'],
-                        query_text=q['query_content'],
+                        query_text=q['query_content'] if 'query_content' in q else q.get('query_text', ''),
                         relevant_doc_ids=q['relevant_doc_ids']
                     ))
             return queries, split
+
+    default_queries = DATA_DIR / "evaluation_queries.jsonl"
+    if default_queries.exists():
+        queries = []
+        with default_queries.open(encoding="utf-8") as f:
+            for line in f:
+                queries.append(EvalQuery(**json.loads(line)))
+        return queries, "default"
 
     default_queries = DATA_DIR / "queries.jsonl"
     if default_queries.exists():
@@ -91,7 +112,7 @@ def _list_available_splits() -> List[str]:
         return []
     return sorted(
         d.name for d in DATA_DIR.iterdir()
-        if d.is_dir() and (d / "queries.jsonl").exists()
+        if d.is_dir() and ((d / "evaluation_queries.jsonl").exists() or (d / "queries.jsonl").exists())
     )
 
 # ---------------------------------------------------------------------------

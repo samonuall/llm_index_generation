@@ -307,37 +307,27 @@ def plot_experiment(experiment_dir: pathlib.Path) -> list[pathlib.Path]:
     for it in iter_nums:
         accepted_data[it] = _load_accepted(experiment_dir, it)
 
-    # Plot recall@100
-    try:
-        p = _make_plot(
-            experiment_dir=experiment_dir,
-            iterations=iterations,
-            accepted_data=accepted_data,
-            hypotheses=hypotheses,
-            metric_key="recall_at_100",
-            metric_label="Recall@100",
-            filename="recall_at_100.png",
-        )
-        saved.append(p)
-        print(f"[plot_experiment] Saved: {p}")
-    except Exception as e:
-        print(f"[plot_experiment] Failed to generate recall_at_100.png: {e}")
-
-    # Plot nDCG@10
-    try:
-        p = _make_plot(
-            experiment_dir=experiment_dir,
-            iterations=iterations,
-            accepted_data=accepted_data,
-            hypotheses=hypotheses,
-            metric_key="ndcg_at_10",
-            metric_label="nDCG@10",
-            filename="ndcg_at_10.png",
-        )
-        saved.append(p)
-        print(f"[plot_experiment] Saved: {p}")
-    except Exception as e:
-        print(f"[plot_experiment] Failed to generate ndcg_at_10.png: {e}")
+    plots = [
+        ("recall_at_100",      "Val Recall@100",        "val_recall_at_100.png"),
+        ("ndcg_at_10",         "Val nDCG@10",           "val_ndcg_at_10.png"),
+        ("eval_recall_at_100", "Eval Recall@100",       "eval_recall_at_100.png"),
+        ("eval_ndcg_at_10",    "Eval nDCG@10",          "eval_ndcg_at_10.png"),
+    ]
+    for metric_key, metric_label, filename in plots:
+        try:
+            p = _make_plot(
+                experiment_dir=experiment_dir,
+                iterations=iterations,
+                accepted_data=accepted_data,
+                hypotheses=hypotheses,
+                metric_key=metric_key,
+                metric_label=metric_label,
+                filename=filename,
+            )
+            saved.append(p)
+            print(f"[plot_experiment] Saved: {p}")
+        except Exception as e:
+            print(f"[plot_experiment] Failed to generate {filename}: {e}")
 
     return saved
 

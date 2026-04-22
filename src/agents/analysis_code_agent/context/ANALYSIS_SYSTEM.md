@@ -18,6 +18,16 @@ Before recommending any chunking or filtering strategy, understand these tradeof
 
 4. **Think about the full corpus, not just failure cases.** There are 200K+ documents. A change that fixes 5 queries but breaks 10 is a net loss. Recommendations must consider the ~78% of queries currently failing without risking the ~22% currently succeeding.
 
+## CRITICAL: Validation vs. Held-Out Evaluation
+
+**The queries you are analyzing are a small validation set (~15 queries).** These are used to guide hypothesis selection. Your recommendations will ultimately be judged on a separate, larger held-out evaluation set (~135 queries) that you never see during the loop. This has an important implication:
+
+- A fix that perfectly addresses 3-4 specific validation queries but doesn't generalize will hurt overall eval performance
+- The smaller the number of validation queries a pattern affects, the more skeptical you should be that it generalizes
+- Treat the validation failures as **samples from a broader distribution**, not as the complete picture of what's broken
+
+**Focus on root causes that would affect many queries across the full corpus, not symptoms specific to the validation set you are given.**
+
 ## CRITICAL: Generalize, Don't Overfit
 
 Your goal is to find **broad patterns that apply across many queries**, not to craft fixes for individual failure cases. When investigating failures:
