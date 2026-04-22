@@ -187,9 +187,14 @@ def main():
     parser.add_argument(
         "--split",
         type=str,
-        required=True,
+        default=None,
         choices=list(SPLIT_MAP.keys()),
-        help="CRUMB split name"
+        help="CRUMB split name (omit if using --all)"
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Download all splits",
     )
     parser.add_argument(
         "--n-queries",
@@ -206,28 +211,33 @@ def main():
 
     args = parser.parse_args()
 
-    cache_dir = get_cache_dir(args.split)
-    print(f"\n{'='*70}")
-    print(f"CRUMB Data Download (Streaming) — Split: {args.split}")
-    if args.limit:
-        print(f"Document limit: {args.limit:,}")
-    print(f"Cache directory: {cache_dir}")
-    print(f"{'='*70}\n")
+    if not args.all and not args.split:
+        parser.error("Either --split <name> or --all is required.")
 
-    val_queries, eval_queries = load_queries(args.split, args.n_queries)
-    docs = load_full_corpus_streaming(args.split, args.limit)
+    splits = list(SPLIT_MAP.keys()) if args.all else [args.split]
 
-    # Report stats
-    val_relevant_ids = {str(rid) for q in val_queries for rid in q["relevant_doc_ids"]}
-    eval_relevant_ids = {str(rid) for q in eval_queries for rid in q["relevant_doc_ids"]}
-    print(f"\n{'='*70}")
-    print(f"✓ Download complete")
-    print(f"  Split       : {args.split}")
-    print(f"  Val Queries : {len(val_queries)} ({len(val_relevant_ids)} relevant docs)")
-    print(f"  Eval Queries: {len(eval_queries)} ({len(eval_relevant_ids)} relevant docs)")
-    print(f"  Total docs  : {len(docs):,}")
-    print(f"  Location    : {cache_dir}")
-    print(f"{'='*70}\n")
+    for split in splits:
+        cache_dir = get_cache_dir(split)
+        print(f"\n{'='*70}")
+        print(f"CRUMB Data Download (Streaming) — Split: {split}")
+        if args.limit:
+            print(f"Document limit: {args.limit:,}")
+        print(f"Cache directory: {cache_dir}")
+        print(f"{'='*70}\n")
+
+        val_queries, eval_queries = load_queries(split, args.n_queries)
+        docs = load_full_corpus_streaming(split, args.limit)
+
+        val_relevant_ids = {str(rid) for q in val_queries for rid in q["relevant_doc_ids"]}
+        eval_relevant_ids = {str(rid) for q in eval_queries for rid in q["relevant_doc_ids"]}
+        print(f"\n{'='*70}")
+        print(f"✓ Download complete")
+        print(f"  Split       : {split}")
+        print(f"  Val Queries : {len(val_queries)} ({len(val_relevant_ids)} relevant docs)")
+        print(f"  Eval Queries: {len(eval_queries)} ({len(eval_relevant_ids)} relevant docs)")
+        print(f"  Total docs  : {len(docs):,}")
+        print(f"  Location    : {cache_dir}")
+        print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":
