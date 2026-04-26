@@ -1,0 +1,51 @@
+# --- LLM models (analysis + code agents) ---
+analysis_model: "openai/claude-haiku-4-5"
+analysis_temperature: 0.6
+code_model: "openai/claude-haiku-4-5"
+code_temperature: 1.0
+api_base: "https://thekeymaker.umass.edu/"
+
+# --- Dense vector server (LanceDB + FastAPI) ---
+dense_server_port: 8766
+lance_uri: ".lance_cache"
+server_startup_timeout: 300        # 5 minutes - safe for large indexes
+preprocess_timeout_seconds: 900    # 15 minutes - middle ground
+dense_batch_size: 5000             # how many chunks to ship per HTTP request
+
+# --- Embedding endpoint (OpenAI-compatible /v1/embeddings) ---
+embedding_endpoint_url: "http://gypsum-gpu166:45681/v1"
+embedding_model: "Qwen/Qwen3-Embedding-0.6B"
+embedding_tokenizer_id: "Qwen/Qwen3-Embedding-0.6B"
+embedding_max_input_tokens: 8192
+embedding_safety_margin_tokens: 8
+embedding_batch_max_items: 32      # items per POST
+embedding_batch_max_tokens: 200000 # total tokens per POST
+embedding_request_timeout: 120
+embedding_max_retries: 3
+embedding_backoff: 2.0
+embedding_normalize: true          # L2-normalise so cosine == dot product
+# embedding_truncate_dim: null     # keep native dim
+# embedding_api_key_env: null      # set to env var name if your endpoint needs a Bearer key
+
+# --- Vector index (HNSW + cosine) ---
+vector_index:
+  index_type: "IVF_HNSW_SQ"        # HNSW with scalar-quantised IVF buckets
+  metric: "cosine"
+  num_partitions: 256              # IVF partitions; clamped down on small corpora
+  num_sub_vectors: 96              # adjusted at build time to divide embedding dim
+  m: 32                            # HNSW max neighbours per layer
+  ef_construction: 200             # HNSW build-time candidates
+  candidate_k: 1000                # how many chunks to fetch before MaxP aggregation
+  nprobes: 16                      # IVF probes at query time
+  refine_factor: 10                # over-fetch factor for re-ranking with full vectors
+
+# --- Corpus + sampling ---
+corpus_size: 1000                  # full corpus by default
+max_distractors: 1000
+
+# --- Loop control ---
+max_hypotheses: 4
+recall_improvement_threshold: 0.00001
+analysis_max_turns: 4
+min_tool_turns: 3
+use_tools: true
