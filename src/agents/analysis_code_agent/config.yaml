@@ -1,7 +1,7 @@
-analysis_model: "openai/claude-haiku-4-5"
-analysis_temperature: 0.6
-code_model: "openai/claude-haiku-4-5"
-code_temperature: 1.0
+analysis_model: "openai/claude-sonnet-4-6"
+analysis_temperature: 1.0
+code_model: "openai/claude-sonnet-4-6"
+code_temperature: 0.0
 api_base: "https://thekeymaker.umass.edu/"
 
 server_port: 8765
