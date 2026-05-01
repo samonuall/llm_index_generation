@@ -545,8 +545,16 @@ class AnalysisCodeAgent(AgentRunner):
 
         # Create tracker + sub-agents + journal
         tracker = RunTracker()
-        analysis_agent = AnalysisAgent(self._config, tracker=tracker, split=self.split)
-        code_agent = CodeAgent(self._config, tracker=tracker, split=self.split, log_dir=self._experiment_dir)
+        n_val = len(val_queries)
+        n_eval = len(eval_queries)
+        analysis_agent = AnalysisAgent(
+            self._config, tracker=tracker, split=self.split,
+            n_val_queries=n_val, n_eval_queries=n_eval,
+        )
+        code_agent = CodeAgent(
+            self._config, tracker=tracker, split=self.split, log_dir=self._experiment_dir,
+            n_val_queries=n_val, n_eval_queries=n_eval,
+        )
         max_hypotheses = self._config.get("max_hypotheses", 4)
         all_past_hypotheses: list[dict] = []  # track across loops
         journal = RunJournal(self._experiment_dir)

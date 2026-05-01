@@ -51,7 +51,15 @@ class HypothesisResult:
 
 class CodeAgent:
 
-    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue", log_dir: pathlib.Path | None = None) -> None:
+    def __init__(
+        self,
+        config: dict,
+        tracker=None,
+        split: str = "tip_of_the_tongue",
+        log_dir: pathlib.Path | None = None,
+        n_val_queries: int = 0,
+        n_eval_queries: int = 0,
+    ) -> None:
         self._config = config
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
@@ -66,9 +74,16 @@ class CodeAgent:
         self._split = split
         self._log_dir = log_dir
 
-        # Load system prompt
+        # Load system prompt with concrete query counts injected
         system_path = _AGENT_DIR / "context" / "CODE_SYSTEM.md"
-        self._system_prompt = system_path.read_text(encoding="utf-8")
+        template = system_path.read_text(encoding="utf-8")
+        one_query_pct = (100.0 / n_val_queries) if n_val_queries else 0.0
+        self._system_prompt = (
+            template
+            .replace("{{VAL_QUERY_COUNT}}", str(n_val_queries))
+            .replace("{{EVAL_QUERY_COUNT}}", str(n_eval_queries))
+            .replace("{{VAL_ONE_QUERY_PCT}}", f"+{one_query_pct:.2f}%")
+        )
 
     def _log_call(self, label: str, messages: list[dict], response_text: str) -> None:
         """Write a verbose log of a code agent LLM call, matching analysis agent style."""
