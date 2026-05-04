@@ -477,7 +477,7 @@ class AnalysisAgent:
             f"{journal_section}"
             f"## Current Evaluation (validation set — {n_val} queries)\n"
             f"> Note: these metrics are on a small validation set. Hypotheses adopted here will be\n"
-            f"> tested on a separate held-out eval set (~135 queries) that is never used to guide\n"
+            f"> tested on a separate held-out eval set that is never used to guide\n"
             f"> decisions. Prioritise generalizable strategies over fixes for specific val queries.\n"
             f"\n"
             f"- Recall@100: {recall_100:.4f} (baseline: {baseline_recall:.4f})\n"

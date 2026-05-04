@@ -19,9 +19,9 @@ ROOT = pathlib.Path(__file__).resolve().parent
 
 # ── EDIT ME ──────────────────────────────────────────────────────────────────
 SPLITS = [
+    "stack_exchange",
     "clinical_trial",
     "paper_retrieval",
-    "stack_exchange",
     "legal_qa",
     "tip_of_the_tongue",
     "set_operation_entity_retrieval",

@@ -13,7 +13,7 @@ bm25_batch_size: 100000          # Good balance
 corpus_size: null                # Full corpus
 max_distractors: null            # No limits
 
-max_hypotheses: 2
+max_hypotheses: 4
 recall_improvement_threshold: 0.00001
 analysis_max_turns: 10
 min_tool_turns: 5
