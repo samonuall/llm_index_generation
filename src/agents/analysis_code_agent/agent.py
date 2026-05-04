@@ -634,16 +634,18 @@ class AnalysisCodeAgent(AgentRunner):
                 print(f"[agent] Analysis failed: {e}")
                 continue
 
-            # Hypothesis generation uses val queries
+            # Hypothesis generation uses val queries.
+            # NOTE: persistent_failure_ids is intentionally not passed any more —
+            # priming the code agent with "MUST target these queries" caused
+            # over-fitting on a small set of unfixable queries each iteration.
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
-            persistent_fails = journal.persistent_failure_ids(min_iters=len(journal.iterations))
             query_lookup = {q.query_id: q.query_text for q in val_queries} if self._use_contrastive else None
             hypotheses = asyncio.run(code_agent.generate_hypotheses_async(
                 analysis_result.summary,
                 current_code,
                 n=max_hypotheses,
                 past_hypotheses=all_past_hypotheses if (all_past_hypotheses and self._use_history) else None,
-                persistent_failure_ids=persistent_fails if (persistent_fails and self._use_history) else None,
+                persistent_failure_ids=None,
                 query_lookup=query_lookup,
             ))
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")

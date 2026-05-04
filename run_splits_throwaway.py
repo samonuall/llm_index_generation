@@ -19,13 +19,13 @@ ROOT = pathlib.Path(__file__).resolve().parent
 
 # ── EDIT ME ──────────────────────────────────────────────────────────────────
 SPLITS = [
-    "paper_retrieval",
     "clinical_trial",
+    "paper_retrieval",
+    "stack_exchange",
     "legal_qa",
+    "tip_of_the_tongue",
     "set_operation_entity_retrieval",
     "theorem_retrieval",
-    "stack_exchange",
-    "tip_of_the_tongue",
     "code_retrieval",
 ]
 
@@ -33,7 +33,7 @@ SPLITS = [
 MAIN_ARGS = [
     "--agent", "analysis_code_agent",
     "--loops", "5",
-    "--condition", "agent_history",
+    "--condition", "agent",
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 

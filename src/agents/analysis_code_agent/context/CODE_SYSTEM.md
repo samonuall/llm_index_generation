@@ -30,28 +30,36 @@ The `preprocess(self, docs: List[Document]) -> List[Chunk]` method must:
 
 **CRITICAL**: `chunk.doc_id` must be one of the original `doc_id` values passed in. Eval matches retrieved chunks back to gold docs using `doc_id` — any mismatch causes zero recall for those queries.
 
-## CRITICAL: Corpus Structure
+## CRITICAL: You Are Free to Refactor or Replace Existing Code
 
-Each `Document` is a full document (potentially several thousand words), NOT a pre-chunked passage. The corpus description in the analysis provides details about the specific document type and domain.
+The current `preprocess.py` you receive is one previous attempt. **You are not required to keep it.** You may:
+- Add new chunks alongside existing ones
+- Modify how existing chunks are constructed
+- Delete chunks, helpers, or constants that are not justified by evidence
+- Rewrite the entire preprocessor from scratch if a fundamentally different approach is better supported by the analysis
 
-**Key implications for preprocessing**:
-- Documents are long — chunking strategies (sections, paragraphs, windows) may help, but read the warnings below first
-- The primary retrieval challenge is **vocabulary mismatch** between queries and gold documents
-- Consider strategies like: title prepending, text augmentation, selective content boosting
-- Each chunk's `doc_id` must match the source `Document.doc_id` exactly
+A common failure mode in this loop is "ratchet accretion" — each iteration only stacks new helpers on top of old ones until the file is full of half-justified code paths. If a previous chunk type or helper is not earning its keep, remove it. Iteration quality > code preservation.
 
-## CRITICAL: Avoid Over-Chunking and Regressions
+That said, **destructive changes carry regression risk**: removing a chunk that the corpus is currently relying on can drop recall. When you remove or modify something, do it because the evidence in the analysis says it's harmful or unnecessary, not for stylistic reasons.
 
-**Always keep the original full-document chunk.** Any new chunks (section-level, paragraph-level, etc.) should be ADDED alongside the original, not replace it. The full-document chunk is the baseline — removing it risks regressing queries that currently succeed. The evaluation uses max-score aggregation across chunks per document, so additional chunks can only help (they give new chances to match) as long as the original is preserved.
+## CRITICAL: Be Open to New Approaches
 
-**Do NOT split documents into many small chunks without the full-doc fallback.** Splitting each document into 10-20 chunks creates millions of index entries, which:
+If the current preprocess.py is built around one strategy (e.g. "extract section X and repeat it") and that strategy has plateaued or hurt performance, **do not propose another variant of the same strategy**. Propose a mechanically different approach — a different transformation of the text, a different unit of indexing, a different way of bridging vocabulary gaps. Variants of a failing approach almost always also fail.
+
+Equally: do not feel obligated to adopt the corpus's "obvious" preprocessing strategy if the data says otherwise. Let the evidence in the analysis summary drive the design.
+
+## CRITICAL: Avoid Over-Chunking
+
+**Do NOT split documents into many small chunks.** Splitting each document into 10-20 chunks creates millions of index entries, which:
 - Inflates the index with short boilerplate-heavy chunks that score artificially high due to BM25 length normalization
 - Shifts IDF values as terms appear across more chunks
 - Causes the fixed-size retrieval candidate pool to cover fewer unique documents
 
-**Do NOT aggressively filter or remove text.** Removing sections you think are "noise" destroys signal for queries where those terms actually help. Only remove text when you have concrete evidence it causes false positives AND the removal won't hurt other queries.
+Keep the total number of chunks per document modest (typically 1-4).
 
-**The safest pattern is: keep original chunk + add a small number of targeted extra chunks** (e.g., one chunk with title prepended to a key section, or one chunk with extracted key terms). Limit to 1-3 additional chunks per document.
+## CRITICAL: Test for Regressions Implicitly
+
+The eval uses max-score aggregation per `doc_id` across all chunks. So additional chunks can in principle only help. But if you *modify or remove* the chunk that previously contained the matching content, you can lose existing hits. When in doubt, evaluate whether your change preserves the chunk(s) that the currently-succeeding queries depend on — and if not, justify the trade-off.
 
 Each `Document` has:
 - `doc_id` (str): unique identifier
@@ -60,7 +68,7 @@ Each `Document` has:
 
 ## Strategy Guidance
 
-**Build on top of the current code, don't throw it away.** Take the advice of the analysis agent and make incremental improvements. Feel free to add new helper functions, classes, libraries, etc.
+Take the analysis agent's recommendations as input — they are evidence-grounded, but they are not the only possible interpretation of the data. If the evidence supports a different strategy than the one the analysis recommends, propose that strategy.
 
 ## Key BM25 Considerations
 
