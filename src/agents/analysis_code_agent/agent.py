@@ -185,8 +185,8 @@ class AnalysisCodeAgent(AgentRunner):
         Overrides AgentRunner.run_eval() to avoid reloading 1M docs from disk.
         Builds a 'harness_eval' index on the server and runs all queries.
         """
-        from .eval_utils import load_preprocessor_from_code, run_subset_eval
-        
+        from .eval_utils import load_preprocessor_from_code, run_subset_eval, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
+
         eval_queries = queries if queries is not None else self._queries
 
         if self._documents is None or eval_queries is None:
@@ -197,7 +197,9 @@ class AnalysisCodeAgent(AgentRunner):
         preprocessor = load_preprocessor_from_code(code)
 
         print(f"[agent] Preprocessing {len(self._documents)} documents ...")
-        chunks = preprocessor.preprocess(self._documents)
+        sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(self._documents)
+        chunks = preprocessor.preprocess(sanitized_docs)
+        remap_chunk_doc_ids(chunks, reverse_map)
         print(f"[agent] Built {len(chunks)} chunks. Pushing to BM25 server ...")
         self._client.build_index("harness_eval", chunks, persist=False)
 
@@ -346,9 +348,11 @@ class AnalysisCodeAgent(AgentRunner):
 
     def _preprocess_with_current_code(self, documents: list, current_code: str) -> list:
         """Load preprocessor from current code and run it on documents."""
-        from .eval_utils import load_preprocessor_from_code
+        from .eval_utils import load_preprocessor_from_code, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
         preprocessor = load_preprocessor_from_code(current_code)
-        return preprocessor.preprocess(documents)
+        sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(documents)
+        chunks = preprocessor.preprocess(sanitized_docs)
+        return remap_chunk_doc_ids(chunks, reverse_map)
 
     # --- Logging ---
 

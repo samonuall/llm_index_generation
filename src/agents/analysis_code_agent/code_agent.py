@@ -667,12 +667,13 @@ from base import BasePreprocessor
 
     def _validate_code(self, code: str, documents: list) -> str | None:
         """Quick exec + preprocess on a tiny sample. Returns error string or None if OK."""
-        from .eval_utils import load_preprocessor_from_code
+        from .eval_utils import load_preprocessor_from_code, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
         try:
             sample = documents[:20]
-            valid_doc_ids = {d.doc_id for d in sample}
+            sanitized_sample, reverse_map = sanitize_docs_for_preprocessing(sample)
+            valid_doc_ids = {d.doc_id for d in sanitized_sample}
             preprocessor = load_preprocessor_from_code(code)
-            chunks = preprocessor.preprocess(sample)
+            chunks = preprocessor.preprocess(sanitized_sample)
             if not chunks:
                 return "preprocess() returned empty list on sample docs"
             for c in chunks:
@@ -684,6 +685,7 @@ from base import BasePreprocessor
                         f"chunk.doc_id must exactly match one of the input document doc_ids. "
                         f"Valid example: '{next(iter(valid_doc_ids))}'"
                     )
+            remap_chunk_doc_ids(chunks, reverse_map)
             return None
         except Exception as e:
             logger.exception("Validation of generated code raised")
@@ -724,11 +726,14 @@ from base import BasePreprocessor
             test_queries = queries
 
             # Load hypothesis preprocessor and run with timeout
+            from .eval_utils import sanitize_docs_for_preprocessing, remap_chunk_doc_ids
             preprocessor = load_preprocessor_from_code(hypothesis.code)
+            sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(documents)
             ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = ex.submit(preprocessor.preprocess, documents)
+            future = ex.submit(preprocessor.preprocess, sanitized_docs)
             try:
                 chunks = future.result(timeout=preprocess_timeout)
+                remap_chunk_doc_ids(chunks, reverse_map)
             except concurrent.futures.TimeoutError:
                 # Avoid blocking indefinitely on shutdown if preprocess() is still running.
                 ex.shutdown(wait=False, cancel_futures=True)
