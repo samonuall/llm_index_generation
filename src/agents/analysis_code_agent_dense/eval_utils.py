@@ -51,8 +51,19 @@ def run_subset_eval(
     queries: list,
     client,
     top_k: int = 100,
+    parent_map: dict[str, str] | None = None,
 ) -> SubsetEvalSummary:
-    """Query the dense server for the given queries and compute metrics."""
+    """Query the dense server for the given queries and compute metrics.
+
+    Args:
+        parent_map: Optional mapping from passage_id → parent_doc_id.
+                    When provided, retrieved passage scores are MaxP-aggregated
+                    to parent-document level, and relevant_doc_ids are also
+                    mapped to parent level before computing metrics.
+                    This is used for CRUMB passage corpus on splits with
+                    document-level labels (clinical_trial, tip_of_the_tongue,
+                    set_operation_entity_retrieval).
+    """
     batch_results = client.batch_retrieve(index_name, queries, top_k=top_k)
     results_by_qid = {r["query_id"]: r["ranked_docs"] for r in batch_results}
 
@@ -64,7 +75,23 @@ def run_subset_eval(
     for q in queries:
         ranked_docs = results_by_qid.get(q.query_id, [])
         retrieved_doc_ids = [d["doc_id"] for d in ranked_docs]
-        relevant_set = set(q.relevant_doc_ids)
+
+        # MaxP parent-document aggregation for passage corpus.
+        if parent_map:
+            parent_scores: dict[str, float] = {}
+            for d in ranked_docs:
+                pid = parent_map.get(d["doc_id"], d["doc_id"])
+                score = d.get("score", 0.0)
+                if pid not in parent_scores or score > parent_scores[pid]:
+                    parent_scores[pid] = score
+            sorted_parents = sorted(parent_scores.items(), key=lambda x: (-x[1], x[0]))
+            retrieved_doc_ids = [pid for pid, _ in sorted_parents]
+            relevant_set = set(
+                parent_map.get(str(rid), str(rid)) for rid in q.relevant_doc_ids
+            )
+        else:
+            relevant_set = set(q.relevant_doc_ids)
+
         n_relevant = len(relevant_set) or 1
 
         ranks = [

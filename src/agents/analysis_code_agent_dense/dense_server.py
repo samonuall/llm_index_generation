@@ -74,6 +74,19 @@ _staging: dict[str, list[dict]] = {}
 _staging_ids: dict[str, set[str]] = {}
 
 
+def _lance_list_tables() -> list[str]:
+    """Return LanceDB table names without relying on deprecated APIs when possible."""
+    if _db is None:
+        return []
+    if hasattr(_db, "list_tables"):
+        return list(_db.list_tables())  # type: ignore[no-untyped-call]
+    return list(_db.table_names())
+
+
+def _lance_table_exists(name: str) -> bool:
+    return name in set(_lance_list_tables())
+
+
 # ---- Request / response models ----
 
 class ChunkIn(BaseModel):
@@ -126,7 +139,7 @@ def _schema(dim: int) -> pa.Schema:
 def _drop_table_if_exists(name: str) -> None:
     """Drop a table on disk and clear our metadata for it. Idempotent."""
     try:
-        if name in _db.table_names():
+        if _lance_table_exists(name):
             _db.drop_table(name)
             logger.info("Dropped existing table '%s'", name)
     except Exception as e:
@@ -160,7 +173,15 @@ def _build_index_from_chunks(name: str, chunk_dicts: list[dict], persist: bool) 
         })
     arrow_table = pa.Table.from_pylist(rows, schema=_schema(dim))
 
-    tbl = _db.create_table(name, data=arrow_table)
+    # Use mode="overwrite" as a hard safety-net: if _drop_table_if_exists()
+    # silently swallowed a drop failure (e.g. a stale table from a previous
+    # crashed run), create_table would raise "Table 'X' already exists".
+    # overwrite=True / mode="overwrite" avoids that entirely.
+    try:
+        tbl = _db.create_table(name, data=arrow_table, mode="overwrite")
+    except TypeError:
+        # Older lancedb versions use overwrite= instead of mode=
+        tbl = _db.create_table(name, data=arrow_table, overwrite=True)
 
     # Vector index configuration.
     vec_cfg = _index_cfg or {}
@@ -181,6 +202,10 @@ def _build_index_from_chunks(name: str, chunk_dicts: list[dict], persist: bool) 
                 num_sub_vectors = cand
                 break
 
+    # Build kwargs progressively — newer LanceDB versions dropped some params.
+    # IVF_HNSW_SQ uses scalar quantisation, not PQ, so num_sub_vectors is not
+    # meaningful for it and may be rejected.  We try increasingly minimal
+    # combinations and fall back to a flat (exhaustive) scan on small corpora.
     create_index_kwargs = dict(
         metric=metric,
         vector_column_name="vector",
@@ -190,13 +215,30 @@ def _build_index_from_chunks(name: str, chunk_dicts: list[dict], persist: bool) 
         m=int(vec_cfg.get("m", 32)),
         ef_construction=int(vec_cfg.get("ef_construction", 200)),
     )
-    try:
-        tbl.create_index(**create_index_kwargs)
-    except TypeError:
-        # Older LanceDB versions don't accept m / ef_construction kwargs
-        for k in ("m", "ef_construction"):
-            create_index_kwargs.pop(k, None)
-        tbl.create_index(**create_index_kwargs)
+    _index_built = False
+    _attempts = [
+        # (keys to remove on this attempt)
+        [],                              # full kwargs
+        ["m", "ef_construction"],        # drop HNSW-specific params
+        ["num_sub_vectors"],             # also drop PQ param
+        ["m", "ef_construction", "num_sub_vectors"],  # minimal IVF
+    ]
+    for extra_drops in _attempts:
+        kwargs = {k: v for k, v in create_index_kwargs.items() if k not in extra_drops}
+        try:
+            tbl.create_index(**kwargs)
+            _index_built = True
+            break
+        except TypeError as e:
+            logger.debug("create_index attempt with drops=%s raised TypeError: %s", extra_drops, e)
+        except Exception as e:
+            logger.debug("create_index attempt with drops=%s raised %s: %s", extra_drops, type(e).__name__, e)
+    if not _index_built:
+        logger.warning(
+            "All create_index attempts failed for '%s' — using flat (exhaustive) search. "
+            "This is safe for corpora <=10 k chunks but slower at scale.",
+            name,
+        )
 
     try:
         tbl.create_scalar_index("doc_id")
@@ -284,7 +326,22 @@ def health():
     }
 
 
-@app.get("/indexes")
+@app.get("/embed_health")
+def embed_health():
+    """Probe the embedding endpoint with a tiny request and return the dimension.
+
+    Called once by the agent after server startup to verify the remote vLLM
+    service is reachable *before* any index build is attempted.
+    """
+    assert _embedder is not None
+    try:
+        dim = _embedder.dim  # triggers a real /v1/embeddings call on first access
+    except Exception as e:
+        logger.exception("Embedding endpoint probe failed: %s", e)
+        raise HTTPException(503, f"Embedding endpoint unreachable: {type(e).__name__}: {e}") from e
+    return {"status": "ok", "embedding_dim": dim, "model": _embedder.model}
+
+
 def list_indexes():
     return {
         "indexes": list(_indexes.keys()),
@@ -297,7 +354,13 @@ def build_index(name: str, req: BuildRequest):
     if not req.chunks:
         raise HTTPException(400, "No chunks provided")
     chunk_dicts = [c.model_dump() for c in req.chunks]
-    info = _build_index_from_chunks(name, chunk_dicts, req.persist)
+    try:
+        info = _build_index_from_chunks(name, chunk_dicts, req.persist)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Build failed for index '%s': %s: %s", name, type(e).__name__, e)
+        raise HTTPException(500, f"Build failed: {type(e).__name__}: {e}") from e
     return {"status": "built", **info}
 
 
@@ -325,12 +388,30 @@ def append_chunks(name: str, req: AppendChunksRequest):
 
 @app.post("/index/{name}/finalize")
 def finalize_index(name: str, req: FinalizeRequest):
-    """Build the index from all staged chunks, then clear the staging buffer."""
-    if name not in _staging or not _staging[name]:
+    """Build the index from staged chunks, then clear staging on success.
+
+    This endpoint is idempotent under client retries:
+    - If the index is already built and no staged chunks remain, return success.
+    - If build fails, keep staged chunks so finalize can be retried.
+    """
+    has_staged = name in _staging and bool(_staging[name])
+    if not has_staged:
+        if name in _indexes:
+            return {"status": "already_built", **_indexes[name]}
         raise HTTPException(400, f"No staged chunks for index '{name}'")
-    chunk_dicts = _staging.pop(name)
+
+    chunk_dicts = _staging[name]
+    try:
+        info = _build_index_from_chunks(name, chunk_dicts, req.persist)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Finalize/build failed for index '%s': %s: %s", name, type(e).__name__, e)
+        raise HTTPException(500, f"Build failed: {type(e).__name__}: {e}") from e
+
+    # Only clear staging after a successful build.
+    _staging.pop(name, None)
     _staging_ids.pop(name, None)
-    info = _build_index_from_chunks(name, chunk_dicts, req.persist)
     return {"status": "built", **info}
 
 
@@ -353,7 +434,12 @@ def batch_retrieve(name: str, req: BatchRetrieveRequest):
 
 @app.delete("/index/{name}")
 def delete_index(name: str):
-    if name not in _indexes and (_db is None or name not in _db.table_names()):
+    try:
+        table_exists = _lance_table_exists(name)
+    except Exception as e:
+        logger.warning("_lance_table_exists('%s') raised %s — assuming exists for safety", name, e)
+        table_exists = True
+    if name not in _indexes and not table_exists:
         raise HTTPException(404, f"Index '{name}' not found")
     _drop_table_if_exists(name)
     return {"status": "deleted"}
@@ -366,9 +452,12 @@ def _atexit_cleanup() -> None:
     if _db is None:
         return
     try:
+        # "current" is the exact name used by the loop-scoped index; it must be
+        # listed explicitly because startswith("") would match everything.
+        ephemeral_exact = {"current"}
         ephemeral_prefixes = ("current_", "hyp_", "baseline_", "synthesized_", "harness_eval", "final_eval")
-        for tname in list(_db.table_names()):
-            if tname.startswith(ephemeral_prefixes):
+        for tname in _lance_list_tables():
+            if tname in ephemeral_exact or tname.startswith(ephemeral_prefixes):
                 try:
                     _db.drop_table(tname)
                 except Exception:
@@ -409,9 +498,11 @@ if __name__ == "__main__":
 
     _db = lancedb.connect(str(_lance_uri))
 
-    # Pre-populate _indexes with any persisted tables that look like ours.
+    # Pre-populate _indexes with any persisted tables. Do not touch the embedder
+    # here – probing dims requires calling /v1/embeddings and can take minutes
+    # on a cold vLLM worker, which would block FastAPI/uvicorn from binding.
     try:
-        for tname in _db.table_names():
+        for tname in _lance_list_tables():
             try:
                 tbl = _db.open_table(tname)
                 _indexes[tname] = {
@@ -420,7 +511,7 @@ if __name__ == "__main__":
                     "build_seconds": -1.0,
                     "index_type": _index_cfg.get("index_type", "IVF_HNSW_SQ"),
                     "metric": _index_cfg.get("metric", "cosine"),
-                    "dim": _embedder.dim,
+                    "dim": None,
                 }
             except Exception as e:
                 logger.warning("Could not open persisted table '%s': %s", tname, e)

@@ -32,7 +32,16 @@ def _with_retry(max_attempts: int = 3, backoff: float = 2.0):
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code < 500:
                         raise
-                    last_exc = e
+                    # Attach the response body so callers can see the server-side
+                    # error message rather than just the HTTP status code.
+                    detail = ""
+                    try:
+                        detail = e.response.json().get("detail", e.response.text)
+                    except Exception:
+                        detail = e.response.text
+                    last_exc = RuntimeError(
+                        f"{e.request.method} {e.request.url} → {e.response.status_code}: {detail}"
+                    )
                 if attempt < max_attempts - 1:
                     time.sleep(backoff * (2 ** attempt))
             raise last_exc
@@ -150,12 +159,11 @@ class DenseClient:
             r.raise_for_status()
 
     def delete_index_safe(self, name: str) -> None:
-        """Delete an index, swallowing 404s (used in `finally` cleanup blocks)."""
+        """Delete an index, swallowing all errors (used in `finally` cleanup blocks)."""
         try:
             self.delete_index(name)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code != 404:
-                raise
+        except Exception:
+            pass
 
     def health(self) -> bool:
         """GET /health -> True if server is up (no retry; used for polling)."""
@@ -170,3 +178,23 @@ class DenseClient:
                 return r.status_code == 200
         except Exception:
             return False
+
+    def probe_embedding(self, timeout: float = 120.0) -> int:
+        """GET /embed_health -> embedding dim, or raise RuntimeError with details.
+
+        Uses a longer timeout because a cold vLLM worker may take 30–60 s to
+        load the model before it can respond to its first embed request.
+        """
+        t = httpx.Timeout(connect=timeout, read=timeout, write=30.0, pool=5.0)
+        with httpx.Client(base_url=self.base_url, timeout=t, trust_env=False) as client:
+            r = client.get("/embed_health")
+            if r.status_code != 200:
+                detail = ""
+                try:
+                    detail = r.json().get("detail", r.text)
+                except Exception:
+                    detail = r.text
+                raise RuntimeError(
+                    f"Embedding endpoint probe failed (HTTP {r.status_code}): {detail}"
+                )
+            return r.json()["embedding_dim"]

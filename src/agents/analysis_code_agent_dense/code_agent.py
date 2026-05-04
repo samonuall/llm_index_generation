@@ -578,6 +578,7 @@ from base import BasePreprocessor
         *,
         iteration: int | None = None,
         current_index_name: str = "current",
+        parent_map: dict[str, str] | None = None,
     ) -> HypothesisResult:
         """Test a single hypothesis by building a temp index and running subset eval.
 
@@ -620,8 +621,8 @@ from base import BasePreprocessor
 
             client.build_index(index_name, chunks, persist=False)
 
-            hyp_eval = run_subset_eval(index_name, test_queries, client)
-            current_eval = run_subset_eval(current_index_name, test_queries, client)
+            hyp_eval = run_subset_eval(index_name, test_queries, client, parent_map=parent_map)
+            current_eval = run_subset_eval(current_index_name, test_queries, client, parent_map=parent_map)
 
             result.hypothesis_recall_100 = hyp_eval.recall_at_100
             result.baseline_recall_100 = current_eval.recall_at_100

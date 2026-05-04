@@ -12,6 +12,12 @@ Usage:
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_history
     uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_contrastive
 
+    # Dense (LanceDB + HNSW + cosine) variant:
+    uv run python main.py --agent analysis_code_agent_dense --loops 3 --condition agent_contrastive
+
+    # Run with passage corpus instead of full document:
+    uv run python main.py --agent analysis_code_agent_dense --loops 3 --corpus passage
+
     # One-shot LLM baseline (no loops):
     uv run python main.py --agent one_shot
 """
@@ -31,6 +37,7 @@ def main() -> None:
             "lite_llm_agent",
             "test_agent",
             "analysis_code_agent",
+            "analysis_code_agent_dense",
             "one_shot",
             "baseline",
             "ai_assistant",
@@ -91,6 +98,13 @@ def main() -> None:
         default=9000,
         help="Max non-relevant docs to sample"
     )
+    parser.add_argument(
+        "--corpus",
+        type=str,
+        default="full_document",
+        choices=["full_document", "passage"],
+        help="Corpus type: full_document (default) or passage",
+    )
 
     args = parser.parse_args()
 
@@ -114,6 +128,16 @@ def main() -> None:
         use_history = args.condition in ("agent_history", "agent_contrastive")
         use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
         agent = AnalysisCodeAgent(use_history=use_history, use_contrastive=use_contrastive, model=args.model, api_base=args.api_base)
+
+    elif args.agent == "analysis_code_agent_dense":
+        from src.agents.analysis_code_agent_dense import AnalysisCodeAgentDense
+        use_history = args.condition in ("agent_history", "agent_contrastive")
+        use_contrastive = args.condition in ("agent_contrastive", "agent_contrastive_no_history")
+        agent = AnalysisCodeAgentDense(
+            use_history=use_history, use_contrastive=use_contrastive,
+            model=args.model, api_base=args.api_base,
+            corpus_type=args.corpus,
+        )
     
     elif args.agent == "one_shot":
         from src.agents.analysis_code_agent.one_shot_agent import run_one_shot

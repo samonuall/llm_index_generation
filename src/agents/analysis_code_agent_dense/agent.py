@@ -76,11 +76,31 @@ def _load_config(overrides: dict | None = None) -> dict:
     return config
 
 
-def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None, seed: int = 42):
+# Passage corpus splits that require MaxP aggregation by parent document.
+# These splits have document-level labels, not per-passage labels.
+# See: https://huggingface.co/datasets/jfkback/crumb#how-to-use-and-evaluate
+MAXP_PASSAGE_SPLITS = {"clinical_trial", "tip_of_the_tongue", "set_operation_entity_retrieval"}
+
+
+def _needs_passage_maxp(split: str, corpus_type: str) -> bool:
+    """Return True if this split+corpus combo needs MaxP parent-document aggregation."""
+    if corpus_type != "passage":
+        return False
+    import re as _re
+    base_split = _re.sub(r"_\d+docs$", "", split)
+    return base_split in MAXP_PASSAGE_SPLITS
+
+
+def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None, seed: int = 42, corpus_type: str = "full_document"):
     """Load queries and corpus from data/.
 
     If corpus_size is None, loads every document. Otherwise uses reservoir
     sampling to select corpus_size documents, always retaining every gold doc.
+
+    Args:
+        corpus_type: "full_document" or "passage".  Selects which data files
+                     to load (documents.jsonl vs passages.jsonl, and the
+                     corresponding query files).
     """
     import random
     from schema import Document, EvalQuery
@@ -102,13 +122,23 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
                     ))
         return queries
 
-    val_queries = _load_queries_file(data_dir / "validation_queries.jsonl")
-    eval_queries = _load_queries_file(data_dir / "evaluation_queries.jsonl")
+    # Select file names based on corpus type.
+    if corpus_type == "passage":
+        val_queries_filename = "passage_validation_queries.jsonl"
+        eval_queries_filename = "passage_evaluation_queries.jsonl"
+        docs_filename = "passages.jsonl"
+    else:
+        val_queries_filename = "validation_queries.jsonl"
+        eval_queries_filename = "evaluation_queries.jsonl"
+        docs_filename = "documents.jsonl"
+
+    val_queries = _load_queries_file(data_dir / val_queries_filename)
+    eval_queries = _load_queries_file(data_dir / eval_queries_filename)
     if not val_queries and not eval_queries:
         val_queries = _load_queries_file(data_dir / "queries.jsonl")
         eval_queries = val_queries
 
-    docs_path = data_dir / "documents.jsonl"
+    docs_path = data_dir / docs_filename
     gold_doc_ids = {doc_id for q in val_queries + eval_queries for doc_id in q.relevant_doc_ids}
     target_non_gold = max(0, corpus_size - len(gold_doc_ids)) if corpus_size is not None else None
 
@@ -135,7 +165,8 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
                 n_non_gold_seen += 1
 
     docs = gold_docs + reservoir
-    print(f"[data] Corpus: {len(docs)} docs ({len(gold_docs)} gold + {len(reservoir)} non-gold), "
+    label = "passages" if corpus_type == "passage" else "docs"
+    print(f"[data] Corpus: {len(docs)} {label} ({len(gold_docs)} gold + {len(reservoir)} non-gold), "
           f"{len(val_queries)} val queries, {len(eval_queries)} eval queries")
     return docs, val_queries, eval_queries
 
@@ -149,6 +180,7 @@ class AnalysisCodeAgentDense(AgentRunner):
         use_contrastive: bool = True,
         model: str | None = None,
         api_base: str | None = None,
+        corpus_type: str = "full_document",
     ) -> None:
         overrides: dict = {}
         if model:
@@ -160,17 +192,20 @@ class AnalysisCodeAgentDense(AgentRunner):
         self._config = _load_config(overrides or None)
         self._use_history = use_history
         self._use_contrastive = use_contrastive
+        self._corpus_type = corpus_type
         self._server_process = None
         self._server_log_path: pathlib.Path | None = None
         port = self._config.get("dense_server_port", self._config.get("server_port", 8766))
         self._client = DenseClient(
             base_url=f"http://localhost:{port}",
+            timeout=self._config.get("dense_client_timeout_seconds", 300),
             batch_size=self._config.get("dense_batch_size", 5_000),
         )
         self._documents: list | None = None
         self._queries: list | None = None
         self._val_queries: list | None = None
         self._eval_queries: list | None = None
+        self._parent_map: dict[str, str] | None = None  # passage_id → parent_id for MaxP
 
     # --- AgentRunner ABC stubs (we override run() instead) ---
 
@@ -209,7 +244,7 @@ class AnalysisCodeAgentDense(AgentRunner):
         index_name = self._eval_index_name("harness_eval", iteration)
         try:
             self._client.build_index(index_name, chunks, persist=False)
-            summary = run_subset_eval(index_name, eval_queries, self._client, top_k=100)
+            summary = run_subset_eval(index_name, eval_queries, self._client, top_k=100, parent_map=self._parent_map)
         finally:
             self._client.delete_index_safe(index_name)
 
@@ -304,6 +339,29 @@ class AnalysisCodeAgentDense(AgentRunner):
             f"Last dense_server.log lines:\n{tail}"
         )
 
+    def _probe_embedding_endpoint(self) -> None:
+        """Verify the remote embedding endpoint is reachable before any index build.
+
+        A cold vLLM worker can take 30–90 s to load the model.  We poll here
+        with a generous timeout so the user sees a clear progress message rather
+        than a cryptic ConnectTimeout inside build_index.
+        """
+        embed_url = self._config.get("embedding_endpoint_url", "<unknown>")
+        embed_model = self._config.get("embedding_model", "<unknown>")
+        warmup_timeout = float(self._config.get("embedding_warmup_timeout", 120.0))
+        print(f"[agent] Probing embedding endpoint {embed_url} (model={embed_model}, timeout={warmup_timeout:.0f}s) ...")
+        try:
+            dim = self._client.probe_embedding(timeout=warmup_timeout)
+            print(f"[agent] Embedding endpoint ready (dim={dim}).")
+        except Exception as e:
+            raise RuntimeError(
+                f"Embedding endpoint not reachable at {embed_url}.\n"
+                f"  model : {embed_model}\n"
+                f"  error : {e}\n"
+                "Check that the vLLM server is running and the URL in config.yaml is correct.\n"
+                "You can also increase embedding_warmup_timeout in config.yaml."
+            ) from e
+
     def _kill_server(self) -> None:
         if self._server_process and self._server_process.poll() is None:
             self._server_process.terminate()
@@ -321,7 +379,7 @@ class AnalysisCodeAgentDense(AgentRunner):
         """Enrich raw_results with per-query data using the named "current" index."""
         from .eval_utils import run_subset_eval
 
-        eval_summary = run_subset_eval(current_index_name, queries, client, top_k=100)
+        eval_summary = run_subset_eval(current_index_name, queries, client, top_k=100, parent_map=self._parent_map)
 
         query_results = []
         for pq, q in zip(eval_summary.per_query, queries):
@@ -361,7 +419,7 @@ class AnalysisCodeAgentDense(AgentRunner):
         index_name = self._eval_index_name("baseline")
         try:
             self._client.build_index(index_name, baseline_chunks, persist=False)
-            baseline_summary = run_subset_eval(index_name, eval_queries, self._client, top_k=100)
+            baseline_summary = run_subset_eval(index_name, eval_queries, self._client, top_k=100, parent_map=self._parent_map)
             return {
                 "recall_at_k": baseline_summary.recall_at_100,
                 "ndcg": baseline_summary.ndcg_at_10,
@@ -498,6 +556,7 @@ class AnalysisCodeAgentDense(AgentRunner):
             "embedding_model": self._config.get("embedding_model"),
             "loops": n_loops,
             "split": getattr(self, "split", "tip_of_the_tongue"),
+            "corpus_type": self._corpus_type,
             "seed": 42,
             "n_docs": n_docs,
             "n_queries": n_queries,
@@ -529,21 +588,35 @@ class AnalysisCodeAgentDense(AgentRunner):
         """Override AgentRunner.run() with analysis+hypothesis loop, dense backend."""
 
         corpus_size = self._config.get("corpus_size", None)
-        documents, val_queries, eval_queries = _load_data(self.split, corpus_size=corpus_size)
+        documents, val_queries, eval_queries = _load_data(
+            self.split, corpus_size=corpus_size, corpus_type=self._corpus_type,
+        )
         self._documents = documents
         self._val_queries = val_queries
         self._eval_queries = eval_queries
+        corpus_label = "Passages" if self._corpus_type == "passage" else "Documents"
         print(f"\n{'='*60}")
         print(f"  Agent       : {self.agent_name}")
         print(f"  Split       : {self.split}")
-        print(f"  Documents   : {len(documents)}")
+        print(f"  Corpus      : {self._corpus_type}")
+        print(f"  {corpus_label:10s}: {len(documents)}")
         print(f"  Val queries : {len(val_queries)}")
         print(f"  Eval queries: {len(eval_queries)}")
         print(f"  Embed model : {self._config.get('embedding_model')}")
         print(f"  Embed URL   : {self._config.get('embedding_endpoint_url')}")
         print(f"{'='*60}\n")
 
+        # Build parent_map for MaxP passage aggregation if needed.
+        if _needs_passage_maxp(self.split, self._corpus_type):
+            self._parent_map = {}
+            for doc in documents:
+                pid = (doc.metadata or {}).get("parent_id")
+                if pid:
+                    self._parent_map[doc.doc_id] = str(pid)
+            print(f"[agent] MaxP passage mode: {len(self._parent_map)} passages mapped to parent docs")
+
         self._ensure_server_running()
+        self._probe_embedding_endpoint()
 
         print(f"\n{'#'*60}")
         print(f"# Baseline (raw documents, no preprocessing) -- computed on current corpus")
@@ -555,7 +628,8 @@ class AnalysisCodeAgentDense(AgentRunner):
 
         model_name = self._config.get("code_model", "unknown_model").replace("/", "_")
         exp_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"dense_{model_name}_{self.condition}_{exp_timestamp}"
+        corpus_tag = f"_{self._corpus_type}" if self._corpus_type != "full_document" else ""
+        self._experiment_dir = _PROJECT_ROOT / "ablation_experiments" / f"dense_{model_name}_{self.condition}{corpus_tag}_{exp_timestamp}"
         self._experiment_dir.mkdir(parents=True, exist_ok=True)
         _setup_debug_logger(self._experiment_dir)
         print(f"[agent] Experiment logs -> {self._experiment_dir}")
@@ -582,40 +656,74 @@ class AnalysisCodeAgentDense(AgentRunner):
             print(f"{'#'*60}")
             logger.info("=== Loop %d/%d start ===", i + 1, n_loops)
 
-            current_index_name = f"current_loop{i}"
-
-            try:
-                raw_results = self.run_eval(iteration=i * 2, queries=eval_queries)
-                eval_log = self._experiment_dir / f"iteration_{i}_eval.json"
-                eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
-            except Exception as e:
-                logger.exception("Eval failed on loop %d", i + 1)
-                print(f"[agent] Eval failed (loop {i + 1}): {e}")
-                continue
-
-            loop_start_recall_100 = raw_results["metrics"]["recall_at_100"]
-            print(f"[agent] Loop {i+1} starting Eval recall@100: {loop_start_recall_100:.4f} "
-                  f"(global best: {best_recall_100:.4f})")
+            # "current" is the single loop-scoped dense index.  We build it once
+            # and reuse it for (a) the harness-equivalent eval on eval_queries,
+            # (b) the val eval on val_queries, (c) the analysis agent's
+            # vector_retrieve tool, and (d) the per-hypothesis delta computation.
+            # This avoids the 3× redundant embedding passes the previous design
+            # incurred (run_eval + current_loop{i} + "current" alias).
+            current_index_name = "current"
 
             current_code = (_AGENT_DIR / "preprocess.py").read_text(encoding="utf-8")
 
-            # Build per-loop "current" dense index that hypotheses & analysis will compare against.
-            print(f"[agent] Building '{current_index_name}' dense index ...")
+            # ---- Build "current" dense index (one embedding pass per loop) ----
+            # Defensively remove any stale "current" table that survived a
+            # previous crashed run (the server-side _drop_table_if_exists call
+            # inside build is a best-effort; this guarantees a clean slate).
+            self._client.delete_index_safe(current_index_name)
+            print(f"[agent] Building 'current' dense index ...")
             try:
                 chunks = self._preprocess_with_current_code(documents, current_code)
                 self._client.build_index(current_index_name, chunks, persist=False)
-                print(f"[agent] '{current_index_name}' built with {len(chunks)} chunks.")
+                print(f"[agent] 'current' built with {len(chunks)} chunks.")
             except Exception as e:
                 logger.exception("Index build failed on loop %d", i + 1)
                 print(f"[agent] Index build failed: {e}")
                 continue
 
             try:
-                # Validation enrichment using the loop-scoped current index
+                from .eval_utils import run_subset_eval
+
+                # ---- Harness eval (eval_queries) on the current dense index ----
+                try:
+                    eval_summary = run_subset_eval(current_index_name, eval_queries, self._client, top_k=100, parent_map=self._parent_map)
+                    raw_results = {
+                        "agent": "current",
+                        "config": {
+                            "top_k": 100,
+                            "n_docs": len(documents),
+                            "n_queries": len(eval_queries),
+                            "n_chunks": len(chunks),
+                            "chunks_per_doc": len(chunks) / max(len(documents), 1),
+                        },
+                        "metrics": {
+                            "recall_at_10": eval_summary.recall_at_10,
+                            "recall_at_100": eval_summary.recall_at_100,
+                            "ndcg_at_10": eval_summary.ndcg_at_10,
+                        },
+                        "query_results": [],
+                    }
+                    loop_start_recall_100 = raw_results["metrics"]["recall_at_100"]
+                    print(
+                        f"\n{'='*60}\n"
+                        f"  Loop {i+1} — Current code eval\n"
+                        f"{'='*60}\n"
+                        f"  Eval  Recall@100 : {eval_summary.recall_at_100:.4f}\n"
+                        f"  Eval  nDCG@10    : {eval_summary.ndcg_at_10:.4f}\n"
+                        f"  (global best: {best_recall_100:.4f}  |  "
+                        f"baseline: {eval_baseline_results.get('recall_at_k', 0.0):.4f})\n"
+                    )
+                    eval_log = self._experiment_dir / f"iteration_{i}_eval.json"
+                    eval_log.write_text(json.dumps(raw_results, indent=2, default=str), encoding="utf-8")
+                except Exception as e:
+                    logger.exception("Eval failed on loop %d", i + 1)
+                    print(f"[agent] Eval failed (loop {i + 1}): {e}")
+                    continue
+
+                # ---- Val eval (val_queries) on the same current dense index ----
                 print("[agent] Enriching eval results with validation per-query data ...")
                 try:
-                    from .eval_utils import run_subset_eval
-                    val_summary = run_subset_eval(current_index_name, val_queries, self._client, top_k=100)
+                    val_summary = run_subset_eval(current_index_name, val_queries, self._client, top_k=100, parent_map=self._parent_map)
                     val_raw_results = {
                         "metrics": {
                             "recall_at_10": val_summary.recall_at_10,
@@ -626,6 +734,10 @@ class AnalysisCodeAgentDense(AgentRunner):
                     val_raw_results = self._enrich_eval_results(
                         val_raw_results, val_queries, self._client,
                         current_index_name=current_index_name,
+                    )
+                    print(
+                        f"  Val   Recall@100 : {val_summary.recall_at_100:.4f}  "
+                        f"(val baseline: {val_baseline_results.get('recall_at_k', 0.0):.4f})"
                     )
                     print(f"[agent] Enriched with {len(val_raw_results.get('query_results', []))} val query results.")
                     val_log = self._experiment_dir / f"iteration_{i}_val.json"
@@ -643,20 +755,16 @@ class AnalysisCodeAgentDense(AgentRunner):
 
                 print("[agent] Running analysis agent on validation data ...")
                 try:
-                    # The analysis agent uses the dense client directly via vector_retrieve;
-                    # it expects the index named "current". Build a temporary alias.
-                    self._client.build_index("current", chunks, persist=False)
-                    try:
-                        analysis_result = analysis_agent.analyze(
-                            eval_results=val_raw_results,
-                            baseline_results=val_baseline_results,
-                            current_code=current_code,
-                            client=self._client,
-                            split=self.split,
-                            journal_summary=journal.summary_for_prompt() if self._use_history else None,
-                        )
-                    finally:
-                        self._client.delete_index_safe("current")
+                    # The "current" index is already live (built at loop start) and
+                    # analysis_tools.vector_retrieve always queries from it by name.
+                    analysis_result = analysis_agent.analyze(
+                        eval_results=val_raw_results,
+                        baseline_results=val_baseline_results,
+                        current_code=current_code,
+                        client=self._client,
+                        split=self.split,
+                        journal_summary=journal.summary_for_prompt() if self._use_history else None,
+                    )
                     self._log_analysis(i, analysis_result)
                 except Exception as e:
                     logger.exception("Analysis agent failed on loop %d", i + 1)
@@ -680,15 +788,38 @@ class AnalysisCodeAgentDense(AgentRunner):
                     print("[agent] No hypotheses generated -- skipping.")
                     continue
 
-                print("[agent] Testing hypotheses on validation queries ...")
+                print(f"[agent] Testing {max_hypotheses} hypotheses on val queries "
+                      f"(val baseline: {val_baseline_results.get('recall_at_k', 0.0):.4f}, "
+                      f"val current: {val_summary.recall_at_100:.4f}) ...")
                 hypothesis_results = []
                 for h in hypotheses:
                     print(f"[agent] Testing {h.id}: {h.description}")
                     result = code_agent.test_hypothesis(
                         h, documents, val_queries, current_code, self._client,
                         iteration=i, current_index_name=current_index_name,
+                        parent_map=self._parent_map,
                     )
                     hypothesis_results.append(result)
+                self._log_hypotheses(i, hypothesis_results)
+
+                # Print a concise comparison table: baseline | current | each hypothesis
+                print(
+                    f"\n{'='*60}\n"
+                    f"  Hypothesis evaluation summary (val, Recall@100)\n"
+                    f"{'='*60}\n"
+                    f"  Baseline  : {val_baseline_results.get('recall_at_k', 0.0):.4f}\n"
+                    f"  Current   : {val_summary.recall_at_100:.4f}"
+                )
+                for r in hypothesis_results:
+                    if r.error:
+                        print(f"  {r.hypothesis.id:<10}: ERROR  — {r.error[:60]}")
+                    else:
+                        marker = "✓" if r.proven else "✗"
+                        print(
+                            f"  {r.hypothesis.id:<10}: {r.hypothesis_recall_100:.4f}  "
+                            f"({r.delta_recall_100:+.4f} vs current)  [{marker}]"
+                        )
+                print(f"{'='*60}\n")
                 self._log_hypotheses(i, hypothesis_results)
 
                 for r in hypothesis_results:
@@ -764,7 +895,7 @@ class AnalysisCodeAgentDense(AgentRunner):
                                     from .eval_utils import run_subset_eval as _rse
                                     synth_chunks = self._preprocess_with_current_code(documents, synthesized)
                                     self._client.build_index(synth_index, synth_chunks, persist=False)
-                                    synth_summary = _rse(synth_index, val_queries, self._client, top_k=100)
+                                    synth_summary = _rse(synth_index, val_queries, self._client, top_k=100, parent_map=self._parent_map)
                                     synth_recall = synth_summary.recall_at_100
                                     print(f"[agent] Synthesized val recall@100={synth_recall:.4f} vs best hypothesis {best_hyp.hypothesis_recall_100:.4f}")
                                     if synth_recall > best_hyp.hypothesis_recall_100:

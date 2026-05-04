@@ -11,16 +11,23 @@ lance_uri: ".lance_cache"
 server_startup_timeout: 300        # 5 minutes - safe for large indexes
 preprocess_timeout_seconds: 900    # 15 minutes - middle ground
 dense_batch_size: 5000             # how many chunks to ship per HTTP request
+dense_client_timeout_seconds: 300 # allow long finalize/build for large corpora
 
 # --- Embedding endpoint (OpenAI-compatible /v1/embeddings) ---
 embedding_endpoint_url: "http://gypsum-gpu166:45681/v1"
 embedding_model: "Qwen/Qwen3-Embedding-0.6B"
 embedding_tokenizer_id: "Qwen/Qwen3-Embedding-0.6B"
-embedding_max_input_tokens: 8192
+embedding_max_input_tokens: 4096
 embedding_safety_margin_tokens: 8
 embedding_batch_max_items: 32      # items per POST
 embedding_batch_max_tokens: 200000 # total tokens per POST
-embedding_request_timeout: 120
+# vLLM cold starts can take minutes – keep read timeout high enough.
+embedding_request_timeout: 600
+embedding_connect_timeout: 300
+embedding_read_timeout: 600
+embedding_write_timeout: 30
+embedding_pool_timeout: 5
+embedding_trust_env: false         # do not inherit http(s)_proxy for localhost services
 embedding_max_retries: 3
 embedding_backoff: 2.0
 embedding_normalize: true          # L2-normalise so cosine == dot product
@@ -40,6 +47,7 @@ vector_index:
   refine_factor: 10                # over-fetch factor for re-ranking with full vectors
 
 # --- Corpus + sampling ---
+# corpus_type: "full_document"     # "full_document" or "passage" (CLI --corpus overrides this)
 corpus_size: 1000                  # full corpus by default
 max_distractors: 1000
 

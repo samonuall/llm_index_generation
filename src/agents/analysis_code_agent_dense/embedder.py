@@ -44,7 +44,13 @@ class EmbedderConfig:
     safety_margin_tokens: int = 8
     batch_max_items: int = 64
     batch_max_tokens: int = 250_000
-    request_timeout: float = 120.0
+    # Total wall-clock for a single /embeddings HTTP round-trip (per batch).
+    request_timeout: float = 300.0
+    connect_timeout: float = 5.0
+    read_timeout: float = 300.0
+    write_timeout: float = 30.0
+    pool_timeout: float = 5.0
+    trust_env: bool = False
     max_retries: int = 3
     backoff: float = 2.0
     api_key_env: str | None = None
@@ -61,7 +67,14 @@ class EmbedderConfig:
             safety_margin_tokens=int(cfg.get("embedding_safety_margin_tokens", 8)),
             batch_max_items=int(cfg.get("embedding_batch_max_items", 64)),
             batch_max_tokens=int(cfg.get("embedding_batch_max_tokens", 250_000)),
-            request_timeout=float(cfg.get("embedding_request_timeout", 120.0)),
+            request_timeout=float(cfg.get("embedding_request_timeout", 300.0)),
+            connect_timeout=float(cfg.get("embedding_connect_timeout", 5.0)),
+            read_timeout=float(
+                cfg.get("embedding_read_timeout", cfg.get("embedding_request_timeout", 300.0))
+            ),
+            write_timeout=float(cfg.get("embedding_write_timeout", 30.0)),
+            pool_timeout=float(cfg.get("embedding_pool_timeout", 5.0)),
+            trust_env=bool(cfg.get("embedding_trust_env", False)),
             max_retries=int(cfg.get("embedding_max_retries", 3)),
             backoff=float(cfg.get("embedding_backoff", 2.0)),
             api_key_env=cfg.get("embedding_api_key_env"),
@@ -199,11 +212,24 @@ class Embedder:
         """POST a single batch to the embeddings endpoint with retries."""
         payload: dict = {"model": self._cfg.model, "input": texts}
         url = f"{self._cfg.endpoint_url}/embeddings"
+        # Avoid inheriting http(s)_proxy for localhost GPU nodes — a bad proxy
+        # can make ConnectTimeout look like a dead embedding service.
+        timeout = httpx.Timeout(
+            self._cfg.request_timeout,
+            connect=self._cfg.connect_timeout,
+            read=self._cfg.read_timeout,
+            write=self._cfg.write_timeout,
+            pool=self._cfg.pool_timeout,
+        )
 
         last_exc: Exception | None = None
         for attempt in range(self._cfg.max_retries):
             try:
-                with httpx.Client(timeout=self._cfg.request_timeout, headers=self._headers) as client:
+                with httpx.Client(
+                    timeout=timeout,
+                    headers=self._headers,
+                    trust_env=self._cfg.trust_env,
+                ) as client:
                     r = client.post(url, json=payload)
                     r.raise_for_status()
                     body = r.json()
