@@ -36,7 +36,12 @@ The `preprocess(self, docs: List[Document]) -> List[Chunk]` method must:
 
 **CRITICAL**: `chunk.doc_id` must be one of the original `doc_id` values passed in. Eval matches retrieved chunks back to gold docs using `doc_id` — any mismatch causes zero recall for those queries.
 
-**CRITICAL: doc_ids are opaque hashes at runtime — do not use them as a retrieval signal.** The `doc_id` values your code receives are randomized hashes of the real identifiers; they carry no semantic meaning, cannot be reverse-mapped to real ids, and must not be parsed, matched against strings, or used in any way to influence chunk text. Treat `doc_id` solely as a stable key to copy verbatim into `chunk.doc_id`. Any attempt to exploit doc_id structure (including hashing known ids to find matches) is an anti-pattern that will not generalize.
+**CRITICAL: doc_ids are opaque hashes at runtime — do not use them as a retrieval signal.**
+- The `doc_id` values your code receives are randomized hashes of the real identifiers.
+- They carry no semantic meaning and cannot be reverse-mapped to real ids.
+- Do **not** parse, match against strings, or use `doc_id` in any way to influence chunk text.
+- Do **not** attempt to reconstruct or guess real ids by hashing known strings.
+- Correct usage: copy `doc_id` verbatim into `chunk.doc_id` — nothing more.
 
 ## CRITICAL: You Are Free to Refactor or Replace Existing Code
 
