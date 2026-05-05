@@ -32,7 +32,7 @@ SPLITS = [
 # Args passed to main.py for every split (split itself is appended automatically)
 MAIN_ARGS = [
     "--agent", "analysis_code_agent",
-    "--loops", "5",
+    "--loops", "3",
     "--condition", "agent",
 ]
 # ─────────────────────────────────────────────────────────────────────────────

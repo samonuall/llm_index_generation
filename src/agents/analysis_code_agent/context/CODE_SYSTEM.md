@@ -27,9 +27,7 @@ The `preprocess(self, docs: List[Document]) -> List[Chunk]` method must:
 - Set `chunk.doc_id` to **exactly match** the source `Document.doc_id` — never set it to a modified form (e.g. the article prefix `"24073089"` instead of `"24073089:1"` is WRONG)
 - Use globally unique `chunk_id` values (e.g. `f"{doc_id}_{i}"`)
 
-**CRITICAL**: `chunk.doc_id` must be one of the `doc_id` values passed in via the `docs` argument. Eval matches retrieved chunks back to gold docs using `doc_id` — any mismatch causes zero recall for those queries.
-
-**CRITICAL: `doc_id` is an opaque hash — do not use it as retrieval signal.** Before your `preprocess()` is called, every `Document.doc_id` is replaced with a hex hash (e.g. `"doc_3a9f12c7b4e60812"`). It carries no path, title, folder, or query information. Any code that parses, splits, or otherwise exploits `doc_id` structure will find only noise and will not improve retrieval performance.
+**CRITICAL**: `chunk.doc_id` must be one of the original `doc_id` values passed in. Eval matches retrieved chunks back to gold docs using `doc_id` — any mismatch causes zero recall for those queries.
 
 ## CRITICAL: You Are Free to Refactor or Replace Existing Code
 
@@ -59,6 +57,7 @@ Each `Document` has:
 - `doc_id` (str): unique identifier
 - `text` (str): full document text (potentially thousands of words)
 - `metadata` (dict): may contain `title`, `aliases`, and other fields — but may also be empty depending on the corpus
+
 
 ## Key BM25 Considerations
 
