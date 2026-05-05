@@ -55,7 +55,14 @@ class AnalysisResult:
 
 
 class AnalysisAgent:
-    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue") -> None:
+    def __init__(
+        self,
+        config: dict,
+        tracker=None,
+        split: str = "tip_of_the_tongue",
+        n_val_queries: int = 0,
+        n_eval_queries: int = 0,
+    ) -> None:
         self._tracker = tracker
         self._model = config.get("analysis_model", "openai/gpt-4o-mini")
         self._temperature = config.get("analysis_temperature", 0.3)
@@ -72,10 +79,17 @@ class AnalysisAgent:
         self._api_key = _proxy_key if config.get("api_base") else None
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
 
-        # Load system prompt, injecting per-split corpus description
+        # Load system prompt, injecting per-split corpus description and concrete query counts
         system_path = _AGENT_DIR / "context" / "ANALYSIS_SYSTEM.md"
         template = system_path.read_text(encoding="utf-8")
-        self._system_prompt = template.replace("{{CORPUS_DESCRIPTION}}", load_corpus_description(split))
+        one_query_pct = (100.0 / n_val_queries) if n_val_queries else 0.0
+        self._system_prompt = (
+            template
+            .replace("{{CORPUS_DESCRIPTION}}", load_corpus_description(split))
+            .replace("{{VAL_QUERY_COUNT}}", str(n_val_queries))
+            .replace("{{EVAL_QUERY_COUNT}}", str(n_eval_queries))
+            .replace("{{VAL_ONE_QUERY_PCT}}", f"+{one_query_pct:.2f}%")
+        )
 
     def analyze(
         self,
