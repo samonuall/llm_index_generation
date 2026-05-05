@@ -66,5 +66,5 @@ Use as many tool turns as you need — investigation is cheap relative to a wast
 When done investigating (after tool investigation), provide a structured summary wrapped in `<summary>...</summary>` tags with:
 - Key failure patterns identified, with **concrete evidence from your tool investigation** — each pattern should be a general property observed across multiple failures, not a single-query observation. At least 3 examples per pattern.
 - A "what currently works" section — what signal is making the successes succeed? Any change must preserve this.
-- Suggest high level reccomendations for the code agent, with a clear explanation of how they address the failure patterns while preserving the success signal. Leave implementation deails to the code agent.
+- Suggest high level recommendations for the code agent, with a clear explanation of how they address the failure patterns while preserving the success signal. Leave implementation details to the code agent.
 - Order by importance: the first recommendation should be the one you expect to have the biggest positive impact on eval performance relative to its regression risk.
