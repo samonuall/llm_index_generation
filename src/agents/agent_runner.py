@@ -7,6 +7,7 @@ run(n_loops) to start the iterative eval-improve loop.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import importlib.util
@@ -104,6 +105,8 @@ class AgentRunner(ABC):
 
         # Import evaluate() from the static harness
         from test_preprocessing_split import evaluate
+        from schema import Document as EvalDocument
+        from base import BasePreprocessor
 
         # Reload preprocess.py fresh each iteration so code changes take effect
         preprocess_path = (
@@ -115,16 +118,42 @@ class AgentRunner(ABC):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)  # type: ignore[union-attr]
 
-        preprocessor = module.Preprocessor()
-        
-        # Pass iteration number and enable tracking
+        inner_preprocessor = module.Preprocessor()
+
+        # Wrap the agent's preprocessor to replace doc_ids with opaque hashes before
+        # the agent code sees them.  This prevents exploitation of the path-encoded
+        # query terms present in CRUMB stack_exchange doc_ids (e.g.
+        # "yeast_dissolve_in_sugar/Osmosis.txt" → a fixed hex token).
+        # chunk.doc_id values are remapped back to originals before scoring.
+        class _DocIdSanitizer(BasePreprocessor):
+            name = inner_preprocessor.name
+            description = inner_preprocessor.description
+
+            def preprocess(self, docs):
+                id_map = {
+                    d.doc_id: "doc_" + hashlib.sha256(d.doc_id.encode()).hexdigest()[:16]
+                    for d in docs
+                }
+                reverse_map = {v: k for k, v in id_map.items()}
+                sanitized = [
+                    EvalDocument(doc_id=id_map[d.doc_id], text=d.text, metadata=d.metadata)
+                    for d in docs
+                ]
+                chunks = inner_preprocessor.preprocess(sanitized)
+                for chunk in chunks:
+                    if chunk.doc_id in reverse_map:
+                        chunk.doc_id = reverse_map[chunk.doc_id]
+                return chunks
+
+        preprocessor = _DocIdSanitizer()
+
         return evaluate(
             preprocessor,
             split=self.split,
             top_k=100,
             save_results=True,
-            iteration=iteration,      # NEW: pass iteration for file naming
-            track_iterations=True     # NEW: enable iteration summary
+            iteration=iteration,
+            track_iterations=True
         )
 
     def _compute_baseline(self) -> dict:

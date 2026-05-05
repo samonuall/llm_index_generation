@@ -55,7 +55,14 @@ class AnalysisResult:
 
 
 class AnalysisAgent:
-    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue") -> None:
+    def __init__(
+        self,
+        config: dict,
+        tracker=None,
+        split: str = "tip_of_the_tongue",
+        n_val_queries: int = 0,
+        n_eval_queries: int = 0,
+    ) -> None:
         self._tracker = tracker
         self._model = config.get("analysis_model", "openai/gpt-4o-mini")
         self._temperature = config.get("analysis_temperature", 0.3)
@@ -64,15 +71,25 @@ class AnalysisAgent:
         self._use_tools = config.get("use_tools", True)
         self._bash_timeout = config.get("bash_timeout_seconds", 30)
         self._llm_timeout = config.get("analysis_llm_timeout", None)
+        self._n_failures_shown = config.get("n_failures_shown", 5)
+        self._n_hard_negatives_shown = config.get("n_hard_negatives_shown", 5)
+        self._n_successes_shown = config.get("n_successes_shown", 8)
         # Only pass api_key explicitly for proxy; native providers read key from env.
         _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
         self._api_key = _proxy_key if config.get("api_base") else None
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
 
-        # Load system prompt, injecting per-split corpus description
+        # Load system prompt, injecting per-split corpus description and concrete query counts
         system_path = _AGENT_DIR / "context" / "ANALYSIS_SYSTEM.md"
         template = system_path.read_text(encoding="utf-8")
-        self._system_prompt = template.replace("{{CORPUS_DESCRIPTION}}", load_corpus_description(split))
+        one_query_pct = (100.0 / n_val_queries) if n_val_queries else 0.0
+        self._system_prompt = (
+            template
+            .replace("{{CORPUS_DESCRIPTION}}", load_corpus_description(split))
+            .replace("{{VAL_QUERY_COUNT}}", str(n_val_queries))
+            .replace("{{EVAL_QUERY_COUNT}}", str(n_eval_queries))
+            .replace("{{VAL_ONE_QUERY_PCT}}", f"+{one_query_pct:.2f}%")
+        )
 
     def analyze(
         self,
@@ -348,12 +365,12 @@ class AnalysisAgent:
             if baseline_r and baseline_r.get("hit") and not r.get("hit"):
                 failures.append(r)
 
-        failures = failures[:5]
+        failures = failures[: self._n_failures_shown]
 
         # Hard negatives: missed queries, top-10 retrieved that aren't gold
         misses = [r for r in query_results if not r.get("hit")]
         hard_negatives = []
-        for r in misses[:5]:
+        for r in misses[: self._n_hard_negatives_shown]:
             wrong_docs = [
                 doc_id
                 for doc_id in r.get("retrieved_doc_ids", [])[:10]
@@ -371,7 +388,7 @@ class AnalysisAgent:
         hits = [r for r in query_results if r.get("hit")]
         successes = sorted(
             hits, key=lambda x: x.get("rank") or 0, reverse=True
-        )[:8]
+        )[: self._n_successes_shown]
 
         return {
             "failures": failures,
@@ -438,7 +455,7 @@ class AnalysisAgent:
                 for r in successes
             ]
             succ_text = (
-                f"### Successes (hit but poor rank, worst first, "
+                f"### Successes (hit, worst rank first, "
                 f"{len(successes)} shown):\n" + "\n".join(lines)
             )
         else:
@@ -474,7 +491,7 @@ class AnalysisAgent:
             f"{journal_section}"
             f"## Current Evaluation (validation set — {n_val} queries)\n"
             f"> Note: these metrics are on a small validation set. Hypotheses adopted here will be\n"
-            f"> tested on a separate held-out eval set (~135 queries) that is never used to guide\n"
+            f"> tested on a separate held-out eval set that is never used to guide\n"
             f"> decisions. Prioritise generalizable strategies over fixes for specific val queries.\n"
             f"\n"
             f"- Recall@100: {recall_100:.4f} (baseline: {baseline_recall:.4f})\n"
@@ -486,6 +503,9 @@ class AnalysisAgent:
             f"```\n"
             f"\n"
             f"## Analysis Targets\n"
+            f"You are required to investigate BOTH failures AND successes — failures show what's broken,\n"
+            f"successes show what signal the index is currently exploiting (which any change must preserve).\n"
+            f"\n"
             f"{failures_text}\n"
             f"\n"
             f"{hn_text}\n"

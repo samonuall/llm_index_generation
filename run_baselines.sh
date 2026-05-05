@@ -155,6 +155,12 @@
 #!/bin/bash
 # Run baseline and AI assistant baseline on all datasets
 
+# Log everything (stdout + stderr) to a timestamped file while still printing to console
+mkdir -p logs
+LOG_FILE="logs/run_baselines_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "Logging to: $LOG_FILE"
+
 # Color output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -162,17 +168,16 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Datasets (with _5000docs suffix)clear
-
+# Datasets (full CRUMB corpus per split)
 DATASETS=(
-    "paper_retrieval_5000docs"
-    "legal_qa_5000docs"
-    "clinical_trial_5000docs"
-    "code_retrieval_5000docs"
-    "stack_exchange_5000docs"
-    "theorem_retrieval_5000docs"
-    "tip_of_the_tongue_5000docs"
-    "set_operation_entity_retrieval_5000docs"
+    "paper_retrieval"
+    "legal_qa"
+    "clinical_trial"
+    "code_retrieval"
+    "stack_exchange"
+    "theorem_retrieval"
+    "tip_of_the_tongue"
+    "set_operation_entity_retrieval"
 )
 
 # Agents (skip AI assistant for now - it has issues)
@@ -248,14 +253,14 @@ print("  Performance Summary")
 print("="*90)
 
 datasets = [
-    "paper_retrieval_5000docs",
-    "legal_qa_5000docs", 
-    "clinical_trial_5000docs",
-    "code_retrieval_5000docs",
-    "stack_exchange_5000docs",
-    "theorem_retrieval_5000docs",
-    "tip_of_the_tongue_5000docs",
-    "set_operation_entity_retrieval_5000docs"
+    "paper_retrieval",
+    "legal_qa",
+    "clinical_trial",
+    "code_retrieval",
+    "stack_exchange",
+    "theorem_retrieval",
+    "tip_of_the_tongue",
+    "set_operation_entity_retrieval"
 ]
 
 agents = ["baseline"]
@@ -286,9 +291,7 @@ for dataset in datasets:
                     r100 = metrics.get("recall_at_100", 0) 
                     ndcg = metrics.get("ndcg_at_10", 0)
                     
-                    # Shorten name for display
-                    short_name = dataset.replace("_5000docs", "")
-                    print(f"{short_name:<45} {agent:<15} {r10:<10.4f} {r100:<10.4f} {ndcg:<10.4f}")
+                    print(f"{dataset:<45} {agent:<15} {r10:<10.4f} {r100:<10.4f} {ndcg:<10.4f}")
                     
                     total_r10 += r10
                     total_r100 += r100
@@ -306,5 +309,5 @@ PYTHON
 
 echo -e "${GREEN}✓ Done! Baseline results ready.${NC}"
 echo -e "${BLUE}To run AI assistant manually on one dataset:${NC}"
-echo -e "  python src/evaluation/scripts/test_preprocessing_split.py --agent ai_assistant_baseline --split paper_retrieval_5000docs"
+echo -e "  python src/evaluation/scripts/test_preprocessing_split.py --agent ai_assistant_baseline --split paper_retrieval"
 echo ""

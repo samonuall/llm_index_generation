@@ -7,6 +7,7 @@ Provides subset evaluation (run_subset_eval) and dynamic preprocessor loading
 
 from __future__ import annotations
 
+import hashlib
 import math
 import sys
 import types
@@ -121,6 +122,34 @@ def run_subset_eval(
         n_queries=len(queries),
         per_query=per_query,
     )
+
+
+def sanitize_docs_for_preprocessing(docs: list) -> tuple[list, dict]:
+    """Replace doc_ids with opaque sha256 hashes before passing to agent code.
+
+    Returns (sanitized_docs, reverse_map) where reverse_map maps hash→original_id.
+    Apply remap_chunk_doc_ids() to chunks after preprocessing to restore originals.
+    """
+    eval_dir = str(pathlib.Path(__file__).parents[2] / "evaluation")
+    if eval_dir not in sys.path:
+        sys.path.insert(0, eval_dir)
+    from schema import Document
+
+    reverse_map: dict[str, str] = {}
+    sanitized = []
+    for d in docs:
+        hashed = "doc_" + hashlib.sha256(d.doc_id.encode()).hexdigest()[:16]
+        reverse_map[hashed] = d.doc_id
+        sanitized.append(Document(doc_id=hashed, text=d.text, metadata=d.metadata))
+    return sanitized, reverse_map
+
+
+def remap_chunk_doc_ids(chunks: list, reverse_map: dict) -> list:
+    """Restore original doc_ids in chunks produced by sanitized preprocessing."""
+    for chunk in chunks:
+        if chunk.doc_id in reverse_map:
+            chunk.doc_id = reverse_map[chunk.doc_id]
+    return chunks
 
 
 def load_preprocessor_from_code(code: str):

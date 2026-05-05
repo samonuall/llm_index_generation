@@ -51,7 +51,15 @@ class HypothesisResult:
 
 class CodeAgent:
 
-    def __init__(self, config: dict, tracker=None, split: str = "tip_of_the_tongue", log_dir: pathlib.Path | None = None) -> None:
+    def __init__(
+        self,
+        config: dict,
+        tracker=None,
+        split: str = "tip_of_the_tongue",
+        log_dir: pathlib.Path | None = None,
+        n_val_queries: int = 0,
+        n_eval_queries: int = 0,
+    ) -> None:
         self._config = config
         self._tracker = tracker
         self._model = config.get("code_model", "openai/gpt-4o")
@@ -66,9 +74,16 @@ class CodeAgent:
         self._split = split
         self._log_dir = log_dir
 
-        # Load system prompt
+        # Load system prompt with concrete query counts injected
         system_path = _AGENT_DIR / "context" / "CODE_SYSTEM.md"
-        self._system_prompt = system_path.read_text(encoding="utf-8")
+        template = system_path.read_text(encoding="utf-8")
+        one_query_pct = (100.0 / n_val_queries) if n_val_queries else 0.0
+        self._system_prompt = (
+            template
+            .replace("{{VAL_QUERY_COUNT}}", str(n_val_queries))
+            .replace("{{EVAL_QUERY_COUNT}}", str(n_eval_queries))
+            .replace("{{VAL_ONE_QUERY_PCT}}", f"+{one_query_pct:.2f}%")
+        )
 
     def _log_call(self, label: str, messages: list[dict], response_text: str) -> None:
         """Write a verbose log of a code agent LLM call, matching analysis agent style."""
@@ -154,15 +169,10 @@ class CodeAgent:
                 + diversity_instruction
             )
 
-        if persistent_failure_ids:
-            pf_ids_str = ", ".join(persistent_failure_ids[:30]) + ("..." if len(persistent_failure_ids) > 30 else "")
-            persistent_section = (
-                f"## Persistent Failures (failing EVERY iteration so far — highest priority)\n"
-                f"These {len(persistent_failure_ids)} query IDs have never been retrieved correctly: {pf_ids_str}\n"
-                f"At least one hypothesis MUST specifically target these queries.\n\n"
-            )
-        else:
-            persistent_section = ""
+        # NOTE: persistent_failure_ids is intentionally ignored. In prior runs
+        # the "you MUST target these queries" instruction caused the agent to
+        # fixate on a handful of unfixable cases and produce non-generalising
+        # hypotheses. The argument is kept for backwards compatibility.
 
         prompt = f"""## Analysis Summary
 {analysis_summary}
@@ -173,19 +183,26 @@ class CodeAgent:
 ```
 
 {past_section}
-{persistent_section}Generate exactly {n} hypotheses to improve the preprocessing code.
+Generate exactly {n} hypotheses to improve the preprocessing code.
 Each hypothesis must be a complete, working preprocess.py implementation.
+
+## You Are Free to Add, Modify, OR Remove Code
+- You can add new chunks alongside existing ones
+- You can modify how existing chunks are constructed
+- You can delete chunks, helpers, or constants if they are not earning their keep
+- You can rewrite the preprocessor from scratch if a fundamentally different approach is better supported by the analysis
+
+A common failure mode is "ratchet accretion" — every iteration only adds new helpers on top of old ones. Don't do that. If a previous strategy is plateauing, propose a **mechanically different** approach. Variants of a failing strategy almost always also fail.
 
 IMPORTANT NOTES:
 - The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
 - The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
 - Documents are full-length documents (potentially thousands of words), not pre-chunked passages.
 
-## CRITICAL: Regression Prevention
-- **ALWAYS keep the original full-document chunk** alongside any new chunks. The eval uses max-score aggregation per doc_id, so extra chunks can only help — but removing the original full-doc chunk risks losing queries that currently succeed.
-- Do NOT split documents into sections/paragraphs WITHOUT also keeping the full original text as chunk 0. The safest pattern: chunk_0 = full original text, chunk_1..N = additional targeted chunks.
-- Do NOT aggressively filter or remove text from the original document. Only add to it.
-- The corpus has 200K+ docs. Splitting each into 10-20 small chunks creates millions of index entries, inflating the index with short metadata-heavy chunks that score high due to BM25 length normalization. Keep additional chunks to 1-3 per document maximum.
+## Regression awareness (not a hard rule)
+- The eval uses max-score aggregation per doc_id across chunks. Adding a new chunk cannot hurt; modifying or removing the chunk that currently matches a working query CAN hurt.
+- When you remove or replace existing chunk-construction logic, do it because the analysis evidence justifies it — and be aware which currently-succeeding queries depend on that logic.
+- Avoid splitting documents into many small chunks (10-20+ per doc): short boilerplate-heavy chunks game BM25 length normalization. Prefer 1-4 chunks per document.
 
 Output each hypothesis as a SEPARATE block using this format (do NOT use JSON):
 
@@ -416,14 +433,9 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
                 + diversity_instruction
             )
 
-        persistent_section = ""
-        if persistent_failure_ids:
-            pf_ids_str = ", ".join(persistent_failure_ids[:30]) + ("..." if len(persistent_failure_ids) > 30 else "")
-            persistent_section = (
-                f"## Persistent Failures (failing EVERY iteration so far — highest priority)\n"
-                f"These {len(persistent_failure_ids)} query IDs have never been retrieved correctly: {pf_ids_str}\n"
-                f"At least one hypothesis MUST specifically target these queries.\n\n"
-            )
+        # NOTE: persistent_failure_ids is intentionally ignored. The kwarg is kept
+        # for backwards compatibility, but priming the agent with "you MUST target
+        # these queries" has been shown to cause overfitting on unfixable cases.
 
         prompt = f"""## Analysis Summary
 {analysis_summary}
@@ -434,28 +446,42 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
 ```
 
 {past_section}
-{persistent_section}Generate exactly {n} hypothesis IDEAS to improve the preprocessing code.
+Generate exactly {n} hypothesis IDEAS to improve the preprocessing code.
 Do NOT include code — just describe each idea clearly.
+
+## The {n} ideas MUST be mechanically distinct from each other
+- They should each apply a fundamentally different *operation* on the text
+  (e.g. one might add a chunk, another might remove/clean text, another might
+  expand/normalize tokens). They should NOT be {n} variations of the same idea
+  with different parameters.
+- If past iterations have all tried variants of one strategy and all failed,
+  do not propose another variant. Propose something mechanically different.
+
+## You Can Refactor or Replace, Not Just Add
+- An idea may include modifying or removing existing chunk-construction logic
+  if the analysis evidence justifies it.
+- An idea may also be a complete rewrite of the preprocessor.
+- "Add a new chunk type" is one option, not the only option.
 
 IMPORTANT NOTES:
 - The documents in this dataset have EMPTY metadata dicts (no title, no aliases). Do NOT rely on doc.metadata for anything.
 - The BM25 tokenizer lowercases and stems text. Stopword removal is NOT done by the preprocessor — it's handled by BM25.
 - Documents are full-length documents (potentially thousands of words), not pre-chunked passages.
 
-## CRITICAL: Regression Prevention
-- **ALWAYS keep the original full-document chunk** alongside any new chunks. The eval uses max-score aggregation per doc_id, so extra chunks can only help — but removing the original full-doc chunk risks losing queries that currently succeed.
-- Do NOT propose splitting documents into sections/paragraphs WITHOUT also keeping the full original text as chunk 0.
-- Do NOT propose aggressively filtering or removing text from the original document. Only add to it.
-- The corpus has 200K+ docs. Avoid creating many small chunks per doc (keep to 1-3 additional chunks max) — over-chunking inflates the index with short metadata-heavy chunks that score high due to BM25 length normalization.
+## Regression awareness (not a hard rule)
+- The eval uses max-score aggregation per doc_id. Pure-addition ideas cannot regress; modifying or removing existing logic can.
+- When proposing a destructive change, briefly note which currently-succeeding queries might be affected and why the change is still net positive.
+- Avoid creating many small chunks per doc (10+ per doc inflates the index and gives short boilerplate chunks artificial score). Prefer 1-4 chunks per document.
 
 Output each hypothesis idea using this format (NO code):
 
 ### H1: <description>
 Rationale: <detailed rationale explaining why this approach should improve retrieval>
+Mechanism: <one-line label of the type of change — e.g. "add chunk", "modify chunk", "remove text", "rewrite", "expand tokens">
 Query IDs: <comma-separated query_ids this targets>
 Falsifying: <condition that would prove this wrong>
 
-Repeat for H2, H3, H4.
+Repeat for H2{', H3, H4' if n >= 4 else ''} (output exactly {n} hypotheses).
 """
 
         messages = [
@@ -510,7 +536,7 @@ Write a complete, working `preprocess.py` implementation for this hypothesis:
 ### {idea['id']}: {idea['description']}
 Rationale: {idea.get('rationale', '')}
 
-## Current preprocess.py (base to build on)
+## Current preprocess.py (reference, NOT mandatory to keep)
 ```python
 {current_code}
 ```
@@ -531,9 +557,18 @@ from base import BasePreprocessor
 - Define `class Preprocessor(BasePreprocessor)` with a `preprocess(self, docs: List[Document]) -> List[Chunk]` method
 - chunk.doc_id must exactly match the source Document.doc_id
 - The documents have EMPTY metadata dicts — do NOT rely on doc.metadata
-- Build on top of the current code, don't throw it away
-- **CRITICAL**: Always emit the original full-document text as chunk_0 (the passthrough chunk). Any additional chunks are extras alongside it, not replacements. This prevents regressions on currently-working queries.
-- Keep additional chunks to 1-3 per document max. Do NOT create many small chunks per doc.
+- Each document must produce at least one Chunk
+
+## You Can Refactor, Replace, or Rewrite
+- The current `preprocess.py` is a starting point, not a constraint. If the hypothesis calls for a fundamentally different approach, write a different one — even from scratch.
+- You may delete helpers or constants from the current code if they are not justified by the new hypothesis.
+- You may modify or replace existing chunk-construction logic — not just add new chunks.
+- "Build on top of" is one option but not the only option. Prefer the cleanest implementation of the hypothesis.
+
+## Regression awareness (guideline, not a rule)
+- The eval uses max-score aggregation across chunks per doc_id, so adding chunks cannot hurt; modifying or removing chunks that currently match can.
+- Keep total chunks per document modest (typically 1-4). Avoid splitting documents into many small chunks.
+- If your implementation removes or replaces a strategy that the current code relies on, do it deliberately — but make sure the new strategy actually replaces the signal that the old one was providing.
 """
 
         messages = [
@@ -647,12 +682,13 @@ from base import BasePreprocessor
 
     def _validate_code(self, code: str, documents: list) -> str | None:
         """Quick exec + preprocess on a tiny sample. Returns error string or None if OK."""
-        from .eval_utils import load_preprocessor_from_code
+        from .eval_utils import load_preprocessor_from_code, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
         try:
             sample = documents[:20]
-            valid_doc_ids = {d.doc_id for d in sample}
+            sanitized_sample, reverse_map = sanitize_docs_for_preprocessing(sample)
+            valid_doc_ids = {d.doc_id for d in sanitized_sample}
             preprocessor = load_preprocessor_from_code(code)
-            chunks = preprocessor.preprocess(sample)
+            chunks = preprocessor.preprocess(sanitized_sample)
             if not chunks:
                 return "preprocess() returned empty list on sample docs"
             for c in chunks:
@@ -664,6 +700,7 @@ from base import BasePreprocessor
                         f"chunk.doc_id must exactly match one of the input document doc_ids. "
                         f"Valid example: '{next(iter(valid_doc_ids))}'"
                     )
+            remap_chunk_doc_ids(chunks, reverse_map)
             return None
         except Exception as e:
             logger.exception("Validation of generated code raised")
@@ -704,11 +741,14 @@ from base import BasePreprocessor
             test_queries = queries
 
             # Load hypothesis preprocessor and run with timeout
+            from .eval_utils import sanitize_docs_for_preprocessing, remap_chunk_doc_ids
             preprocessor = load_preprocessor_from_code(hypothesis.code)
+            sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(documents)
             ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = ex.submit(preprocessor.preprocess, documents)
+            future = ex.submit(preprocessor.preprocess, sanitized_docs)
             try:
                 chunks = future.result(timeout=preprocess_timeout)
+                remap_chunk_doc_ids(chunks, reverse_map)
             except concurrent.futures.TimeoutError:
                 # Avoid blocking indefinitely on shutdown if preprocess() is still running.
                 ex.shutdown(wait=False, cancel_futures=True)
