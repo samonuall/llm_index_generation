@@ -185,8 +185,8 @@ class AnalysisCodeAgent(AgentRunner):
         Overrides AgentRunner.run_eval() to avoid reloading 1M docs from disk.
         Builds a 'harness_eval' index on the server and runs all queries.
         """
-        from .eval_utils import load_preprocessor_from_code, run_subset_eval
-        
+        from .eval_utils import load_preprocessor_from_code, run_subset_eval, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
+
         eval_queries = queries if queries is not None else self._queries
 
         if self._documents is None or eval_queries is None:
@@ -197,7 +197,9 @@ class AnalysisCodeAgent(AgentRunner):
         preprocessor = load_preprocessor_from_code(code)
 
         print(f"[agent] Preprocessing {len(self._documents)} documents ...")
-        chunks = preprocessor.preprocess(self._documents)
+        sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(self._documents)
+        chunks = preprocessor.preprocess(sanitized_docs)
+        remap_chunk_doc_ids(chunks, reverse_map)
         print(f"[agent] Built {len(chunks)} chunks. Pushing to BM25 server ...")
         self._client.build_index("harness_eval", chunks, persist=False)
 
@@ -346,9 +348,11 @@ class AnalysisCodeAgent(AgentRunner):
 
     def _preprocess_with_current_code(self, documents: list, current_code: str) -> list:
         """Load preprocessor from current code and run it on documents."""
-        from .eval_utils import load_preprocessor_from_code
+        from .eval_utils import load_preprocessor_from_code, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
         preprocessor = load_preprocessor_from_code(current_code)
-        return preprocessor.preprocess(documents)
+        sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(documents)
+        chunks = preprocessor.preprocess(sanitized_docs)
+        return remap_chunk_doc_ids(chunks, reverse_map)
 
     # --- Logging ---
 
@@ -545,8 +549,16 @@ class AnalysisCodeAgent(AgentRunner):
 
         # Create tracker + sub-agents + journal
         tracker = RunTracker()
-        analysis_agent = AnalysisAgent(self._config, tracker=tracker, split=self.split)
-        code_agent = CodeAgent(self._config, tracker=tracker, split=self.split, log_dir=self._experiment_dir)
+        n_val = len(val_queries)
+        n_eval = len(eval_queries)
+        analysis_agent = AnalysisAgent(
+            self._config, tracker=tracker, split=self.split,
+            n_val_queries=n_val, n_eval_queries=n_eval,
+        )
+        code_agent = CodeAgent(
+            self._config, tracker=tracker, split=self.split, log_dir=self._experiment_dir,
+            n_val_queries=n_val, n_eval_queries=n_eval,
+        )
         max_hypotheses = self._config.get("max_hypotheses", 4)
         all_past_hypotheses: list[dict] = []  # track across loops
         journal = RunJournal(self._experiment_dir)
@@ -634,16 +646,18 @@ class AnalysisCodeAgent(AgentRunner):
                 print(f"[agent] Analysis failed: {e}")
                 continue
 
-            # Hypothesis generation uses val queries
+            # Hypothesis generation uses val queries.
+            # NOTE: persistent_failure_ids is intentionally not passed any more —
+            # priming the code agent with "MUST target these queries" caused
+            # over-fitting on a small set of unfixable queries each iteration.
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
-            persistent_fails = journal.persistent_failure_ids(min_iters=len(journal.iterations))
             query_lookup = {q.query_id: q.query_text for q in val_queries} if self._use_contrastive else None
             hypotheses = asyncio.run(code_agent.generate_hypotheses_async(
                 analysis_result.summary,
                 current_code,
                 n=max_hypotheses,
                 past_hypotheses=all_past_hypotheses if (all_past_hypotheses and self._use_history) else None,
-                persistent_failure_ids=persistent_fails if (persistent_fails and self._use_history) else None,
+                persistent_failure_ids=None,
                 query_lookup=query_lookup,
             ))
             print(f"[agent] Generated {len(hypotheses)} hypotheses.")

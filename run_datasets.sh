@@ -97,9 +97,48 @@ if [ ! -d "data/${name}" ]; then
     uv run python -m src.evaluation.scripts.get_data --split ${name}
 fi
 
-# Run the agent with specified model
-echo "Starting agent for ${name} with model ${model} at \$(date)"
+# Snapshot existing result files so we can identify the one this run produces
+RESULTS_BEFORE=\$(mktemp)
+ls -1 results/*/*.json 2>/dev/null | sort > "\$RESULTS_BEFORE"
+
+# Run the agent with specified model — capture wall time at the bash layer
+START_EPOCH=\$(date +%s)
+echo "[runtime] start=\$(date -u +%Y-%m-%dT%H:%M:%SZ) split=${name} model=${model}"
 uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_history --split ${name} --model ${model}
+EXIT_CODE=\$?
+END_EPOCH=\$(date +%s)
+ELAPSED=\$((END_EPOCH - START_EPOCH))
+echo "[runtime] end=\$(date -u +%Y-%m-%dT%H:%M:%SZ) split=${name} elapsed_seconds=\$ELAPSED exit_code=\$EXIT_CODE"
+
+# Identify the result JSON this run produced (newest file not in pre-run snapshot)
+RESULTS_AFTER=\$(mktemp)
+ls -1 results/*/*.json 2>/dev/null | sort > "\$RESULTS_AFTER"
+NEW_RESULT=\$(comm -13 "\$RESULTS_BEFORE" "\$RESULTS_AFTER" | tail -n 1)
+rm -f "\$RESULTS_BEFORE" "\$RESULTS_AFTER"
+
+# Extract latency block (wall time + token counts, total + per-agent) from result JSON
+if [ -n "\$NEW_RESULT" ] && [ -f "\$NEW_RESULT" ]; then
+    echo "[runtime] result file: \$NEW_RESULT"
+    uv run python - <<PYEOF
+import json, sys
+with open("\$NEW_RESULT") as f:
+    d = json.load(f)
+lat = d.get("latency") or {}
+print(f"[runtime] llm_total: wall={lat.get('total_wall_time_seconds', 0)}s  "
+      f"calls={lat.get('llm_calls', 0)}  "
+      f"prompt_tokens={lat.get('prompt_tokens', 0)}  "
+      f"completion_tokens={lat.get('completion_tokens', 0)}  "
+      f"total_tokens={lat.get('total_tokens', 0)}")
+for agent_name, vals in (lat.get("by_agent") or {}).items():
+    print(f"[runtime] llm_by_agent.{agent_name}: "
+          f"calls={vals.get('calls', 0)}  "
+          f"wall={vals.get('wall_time', 0):.1f}s  "
+          f"prompt_tokens={vals.get('prompt_tokens', 0)}  "
+          f"completion_tokens={vals.get('completion_tokens', 0)}")
+PYEOF
+else
+    echo "[runtime] WARNING: no new result JSON found — token counts unavailable"
+fi
 
 echo "Job completed at \$(date)"
 SLURM_EOF

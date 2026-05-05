@@ -15,6 +15,13 @@ max_distractors: null            # No limits
 
 max_hypotheses: 4
 recall_improvement_threshold: 0.00001
-analysis_max_turns: 4
-min_tool_turns: 3
+analysis_max_turns: 10
+min_tool_turns: 5
 use_tools: true
+
+# How many candidate cases the analysis agent sees in its initial context.
+# Increased so it has more material to choose a diverse set from. The agent
+# is also explicitly prompted to investigate successes, not only failures.
+n_failures_shown: 8
+n_hard_negatives_shown: 8
+n_successes_shown: 12

@@ -213,17 +213,13 @@ class RunJournal:
             )
             prev_recall = r.recall_at_100
 
-        # Persistent failures
-        pf = self.persistent_failure_ids(min_iters=max(1, len(self.iterations)))
-        if pf:
-            lines.append(
-                f"\n### Persistent failures ({len(pf)} queries failing every iteration)\n"
-                f"  {', '.join(pf[:30])}"
-                + (" ..." if len(pf) > 30 else "")
-            )
-            lines.append(
-                "  → These queries are the hardest to fix. Prioritise them."
-            )
+        # NOTE: persistent-failure listings have been intentionally removed from
+        # the journal summary. In prior runs the explicit "prioritise these"
+        # instruction caused the analysis agent to fixate on the same 3-4
+        # queries every iteration and produce narrative-driven, non-generalising
+        # recommendations. Most "persistent" failures were unfixable BM25-side
+        # vocabulary gaps anyway. The agent now decides which queries to look
+        # at from the per-iteration analysis-targets list.
 
         # Overfitting
         ov = self.overfitting_cases()

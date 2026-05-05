@@ -16,7 +16,7 @@ class Preprocessor(BasePreprocessor):
             chunks.append(Chunk(
                 chunk_id=chunk_id,
                 doc_id=doc.doc_id,
-                text=doc.text,
+                text=augmented_text,
                 metadata=doc.metadata
             ))
         return chunks
