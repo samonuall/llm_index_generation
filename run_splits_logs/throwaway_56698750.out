@@ -1,0 +1,598 @@
+>>> logging output to run_splits_logs/run_splits_20260505_015943.log
+
+============================================================
+  SPLIT: stack_exchange
+============================================================
+>>> removed .bm25_cache/
+>>> reset src/agents/analysis_code_agent/preprocess.py <- DEFAULT_CODE_COPY_FROM_HERE.txt
+>>> uv run python main.py --agent analysis_code_agent --loops 3 --condition agent --split stack_exchange
+[data] Corpus: 5035 docs (127 gold + 4908 non-gold), 20 val queries, 98 eval queries
+
+============================================================
+  Split       : stack_exchange
+  Documents   : 5035
+  Val queries : 20
+  Eval queries: 98
+============================================================
+
+[agent] Starting BM25 server on port 8765 ...
+[agent] BM25 server ready (took 2.0s).
+
+############################################################
+# Baseline (raw documents, no preprocessing) — computed on current corpus
+############################################################
+[agent] Baseline: 5035 chunks from 5035 docs
+[agent] Baseline: 5035 chunks from 5035 docs
+  Eval Recall@100 : 0.6224
+  Eval nDCG@10    : 0.1772
+[agent] Experiment logs → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023
+
+############################################################
+# Loop 1 / 3
+############################################################
+[agent] Preprocessing 5035 documents ...
+[agent] Built 5035 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 0)
+============================================================
+  Recall@10  : 0.2806
+  Recall@100 : 0.6224
+  nDCG@10    : 0.1772
+
+[agent] Loop 1 starting Eval recall@100: 0.6224 (global best: 0.6224)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 5035 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 20 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_0_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_ideas_2026-05-05T02:02:54.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H3_2026-05-05T02:03:01.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H2_2026-05-05T02:03:07.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H1_2026-05-05T02:03:07.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H4_2026-05-05T02:04:51.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Prepend Filename and Folder Name as Boosted Header Text
+[code_agent] H1: delta_recall@100=+0.0000 delta_recall@10=+0.0000 delta_ndcg@10=+0.0000 proven=False
+[agent] Testing H2: Strip Navigation Boilerplate and UI Noise from Document Text
+[code_agent] H2: delta_recall@100=+0.0000 delta_recall@10=+0.0000 delta_ndcg@10=+0.0000 proven=False
+[agent] Testing H3: Add a Second Chunk Containing Only the First 200 Words (Abstract/Lead Paragraph)
+[code_agent] H3: delta_recall@100=+0.0500 delta_recall@10=-0.0250 delta_ndcg@10=-0.0206 proven=True
+[agent] Testing H4: Synonym/Concept Expansion via Keyword Normalization for Domain-Specific Terms
+[code_agent] H4: delta_recall@100=+0.0000 delta_recall@10=-0.0750 delta_ndcg@10=-0.0246 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_0_hypotheses.json
+[agent] Best hypothesis: H3 val_recall@100=0.5750 (Δ+0.0500 vs val current, val baseline=0.5250)
+[agent] Adopting H3 directly.
+[agent] Final code log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_0_final_code.py
+[agent] preprocess.py updated (36 lines).
+[agent] Running authoritative harness eval on adopted code ...
+[agent] Preprocessing 5035 documents ...
+[agent] Built 9936 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 1)
+============================================================
+  Recall@10  : 0.2908
+  Recall@100 : 0.6429
+  nDCG@10    : 0.1882
+
+[agent] Adopted Eval recall@100=0.6429 (global best so far: 0.6224)
+[agent] Global best updated → eval recall@100=0.6429
+
+############################################################
+# Loop 2 / 3
+############################################################
+[agent] Preprocessing 5035 documents ...
+[agent] Built 9936 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 2)
+============================================================
+  Recall@10  : 0.2908
+  Recall@100 : 0.6429
+  nDCG@10    : 0.1882
+
+[agent] Loop 2 starting Eval recall@100: 0.6429 (global best: 0.6429)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 9936 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 20 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_1_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_ideas_2026-05-05T02:20:39.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H4_2026-05-05T02:20:45.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H3_2026-05-05T02:20:54.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H2_2026-05-05T02:20:56.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H1_2026-05-05T02:21:05.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Strip Navigation/Boilerplate Before Indexing (Clean Full-Doc Chunk)
+[code_agent] H1: delta_recall@100=-0.0500 delta_recall@10=+0.0000 delta_ndcg@10=+0.0000 proven=False
+[agent] Testing H2: Replace Lead Chunk with "First Substantive Paragraph" Chunk
+[code_agent] H2: delta_recall@100=+0.0000 delta_recall@10=+0.0000 delta_ndcg@10=+0.0000 proven=False
+[agent] Testing H3: Add Filename/Title Keyword Injection into Full-Doc Chunk
+[code_agent] H3: delta_recall@100=+0.0000 delta_recall@10=+0.0000 delta_ndcg@10=+0.0126 proven=False
+[agent] Testing H4: Remove the Lead Chunk Entirely, Keep Only Cleaned Full-Doc Chunk
+[code_agent] H4: delta_recall@100=-0.0500 delta_recall@10=+0.0250 delta_ndcg@10=+0.0206 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_1_hypotheses.json
+[agent] Best hypothesis: H2 val_recall@100=0.5750 (Δ+0.0000 vs val current, val baseline=0.5750)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Loop 3 / 3
+############################################################
+[agent] Preprocessing 5035 documents ...
+[agent] Built 9936 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 4)
+============================================================
+  Recall@10  : 0.2908
+  Recall@100 : 0.6429
+  nDCG@10    : 0.1882
+
+[agent] Loop 3 starting Eval recall@100: 0.6429 (global best: 0.6429)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 9936 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 20 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_2_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_ideas_2026-05-05T02:24:36.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H2_2026-05-05T02:24:40.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H3_2026-05-05T02:24:58.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H4_2026-05-05T02:25:03.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/code_generate_code_H1_2026-05-05T02:25:04.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Strip Web Navigation Boilerplate Before Indexing
+[code_agent] H1: delta_recall@100=-0.0500 delta_recall@10=+0.0500 delta_ndcg@10=+0.0157 proven=False
+[agent] Testing H2: Remove the Lead-Chunk Strategy Entirely (Revert to Single-Chunk)
+[code_agent] H2: delta_recall@100=-0.0500 delta_recall@10=+0.0250 delta_ndcg@10=+0.0206 proven=False
+[agent] Testing H3: Add a Title/Header Extraction Chunk Using Document Structure Signals
+[code_agent] H3: delta_recall@100=+0.0000 delta_recall@10=+0.0500 delta_ndcg@10=+0.0134 proven=False
+[agent] Testing H4: Sentence-Level Keyword Density Filtering — Index Only the Most Informative Sentences
+[code_agent] H4: delta_recall@100=+0.0000 delta_recall@10=+0.0500 delta_ndcg@10=+0.0123 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/iteration_2_hypotheses.json
+[agent] Best hypothesis: H3 val_recall@100=0.5750 (Δ+0.0000 vs val current, val baseline=0.5750)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Final eval (after 3 loops)
+############################################################
+[agent] Preprocessing 5035 documents ...
+[agent] Built 9936 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent
+============================================================
+  Recall@10  : 0.2908
+  Recall@100 : 0.6429
+  nDCG@10    : 0.1882
+
+
+[agent] Improvement: Eval recall@100 0.6224 → 0.6429 (+0.0204)
+[agent] Preprocessing 5035 documents ...
+[agent] Built 9936 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent
+============================================================
+  Recall@10  : 0.3750
+  Recall@100 : 0.5750
+  nDCG@10    : 0.2202
+
+[agent] Improvement: Val  recall@100 0.5250 → 0.5750 (+0.0500)
+[agent] Results saved → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/results/claude-sonnet-4-6/agent_20260505_022638.json
+[agent] Results copy → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_020023/results.json
+[agent] BM25 server stopped.
+
+============================================================
+  SPLIT: clinical_trial
+============================================================
+>>> removed .bm25_cache/
+>>> reset src/agents/analysis_code_agent/preprocess.py <- DEFAULT_CODE_COPY_FROM_HERE.txt
+>>> uv run python main.py --agent analysis_code_agent --loops 3 --condition agent --split clinical_trial
+[data] Corpus: 375580 docs (16574 gold + 359006 non-gold), 21 val queries, 104 eval queries
+
+============================================================
+  Split       : clinical_trial
+  Documents   : 375580
+  Val queries : 21
+  Eval queries: 104
+============================================================
+
+[agent] Starting BM25 server on port 8765 ...
+[agent] BM25 server ready (took 1.0s).
+
+############################################################
+# Baseline (raw documents, no preprocessing) — computed on current corpus
+############################################################
+[agent] Baseline: 375580 chunks from 375580 docs
+[agent] Baseline: 375580 chunks from 375580 docs
+  Eval Recall@100 : 0.1949
+  Eval nDCG@10    : 0.4721
+[agent] Experiment logs → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138
+
+############################################################
+# Loop 1 / 3
+############################################################
+[agent] Preprocessing 375580 documents ...
+[agent] Built 375580 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 0)
+============================================================
+  Recall@10  : 0.0452
+  Recall@100 : 0.1949
+  nDCG@10    : 0.4721
+
+[agent] Loop 1 starting Eval recall@100: 0.1949 (global best: 0.1949)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 375580 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 21 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_0_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_ideas_2026-05-05T02:39:51.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H1_2026-05-05T02:40:00.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H4_2026-05-05T02:40:12.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H3_2026-05-05T02:40:32.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H2_2026-05-05T02:40:45.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Repeat Conditions and Interventions Fields at the Start of Each Chunk
+[code_agent] H1: delta_recall@100=+0.0005 delta_recall@10=+0.0000 delta_ndcg@10=+0.0038 proven=True
+[agent] Testing H2: Expand Medical Abbreviations and Add Synonym Forms to Document Text
+[code_agent] H2 error: preprocess() timed out after 900s
+[agent] Testing H3: Extract and Deduplicate Eligibility Criteria into a Condensed Separate Chunk
+[code_agent] H3 error: preprocess() timed out after 900s
+[agent] Testing H4: Rewrite Each Document as a Structured Summary Emphasizing Key Clinical Entities
+[code_agent] H4: delta_recall@100=+0.0060 delta_recall@10=-0.0021 delta_ndcg@10=-0.0244 proven=True
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_0_hypotheses.json
+[agent] Best hypothesis: H4 val_recall@100=0.1908 (Δ+0.0060 vs val current, val baseline=0.1848)
+[agent] 2 hypotheses proved — attempting synthesis ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_final_code_2026-05-05T03:20:40.log
+[agent] Synthesized val recall@100=0.1875 vs best hypothesis 0.1908
+[agent] Synthesis did not beat best hypothesis — falling back to H4.
+[agent] Final code log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_0_final_code.py
+[agent] preprocess.py updated (192 lines).
+[agent] Running authoritative harness eval on adopted code ...
+[agent] Preprocessing 375580 documents ...
+[agent] Built 1078873 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 1)
+============================================================
+  Recall@10  : 0.0460
+  Recall@100 : 0.1967
+  nDCG@10    : 0.4785
+
+[agent] Adopted Eval recall@100=0.1967 (global best so far: 0.1949)
+[agent] Global best updated → eval recall@100=0.1967
+
+############################################################
+# Loop 2 / 3
+############################################################
+[agent] Preprocessing 375580 documents ...
+[agent] Built 1078873 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 2)
+============================================================
+  Recall@10  : 0.0460
+  Recall@100 : 0.1967
+  nDCG@10    : 0.4785
+
+[agent] Loop 2 starting Eval recall@100: 0.1967 (global best: 0.1967)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 1078873 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 21 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_1_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_ideas_2026-05-05T03:50:45.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H1_2026-05-05T03:50:50.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H3_2026-05-05T03:50:57.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H4_2026-05-05T03:51:20.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H2_2026-05-05T03:51:45.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Revert to Single Full-Text Chunk Only
+[code_agent] H1: delta_recall@100=-0.0060 delta_recall@10=+0.0021 delta_ndcg@10=+0.0244 proven=False
+[agent] Testing H2: Inline Synonym/Abbreviation Expansion in the Full-Text Chunk
+[code_agent] H2 error: preprocess() timed out after 900s
+[agent] Testing H3: Title + Conditions Front-Loading with Repetition in Single Chunk
+[code_agent] H3: delta_recall@100=-0.0060 delta_recall@10=+0.0021 delta_ndcg@10=+0.0244 proven=False
+[agent] Testing H4: Strip Boilerplate/Administrative Text to Reduce Noise
+[code_agent] H4: delta_recall@100=-0.0079 delta_recall@10=+0.0008 delta_ndcg@10=+0.0116 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_1_hypotheses.json
+[agent] Best hypothesis: H1 val_recall@100=0.1848 (Δ-0.0060 vs val current, val baseline=0.1908)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Loop 3 / 3
+############################################################
+[agent] Preprocessing 375580 documents ...
+[agent] Built 1078873 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 4)
+============================================================
+  Recall@10  : 0.0460
+  Recall@100 : 0.1967
+  nDCG@10    : 0.4785
+
+[agent] Loop 3 starting Eval recall@100: 0.1967 (global best: 0.1967)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 1078873 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 21 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_2_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_ideas_2026-05-05T04:42:24.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H1_2026-05-05T04:42:30.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H2_2026-05-05T04:42:36.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H4_2026-05-05T04:42:49.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/code_generate_code_H3_2026-05-05T04:44:24.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Reduce to Single Full-Text Chunk Per Document
+[code_agent] H1: delta_recall@100=-0.0060 delta_recall@10=+0.0021 delta_ndcg@10=+0.0244 proven=False
+[agent] Testing H2: Title + Conditions Repetition Prefix on Full Document
+[code_agent] H2: delta_recall@100=-0.0060 delta_recall@10=+0.0021 delta_ndcg@10=+0.0244 proven=False
+[agent] Testing H3: Synonym and Abbreviation Expansion for Medical Terms
+[code_agent] H3 error: preprocess() timed out after 900s
+[agent] Testing H4: Remove Boilerplate/Administrative Text Before Indexing
+[code_agent] H4: delta_recall@100=-0.0053 delta_recall@10=+0.0021 delta_ndcg@10=+0.0244 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/iteration_2_hypotheses.json
+[agent] Best hypothesis: H4 val_recall@100=0.1856 (Δ-0.0053 vs val current, val baseline=0.1908)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Final eval (after 3 loops)
+############################################################
+[agent] Preprocessing 375580 documents ...
+[agent] Built 1078873 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent
+============================================================
+  Recall@10  : 0.0460
+  Recall@100 : 0.1967
+  nDCG@10    : 0.4785
+
+
+[agent] Improvement: Eval recall@100 0.1949 → 0.1967 (+0.0018)
+[agent] Preprocessing 375580 documents ...
+[agent] Built 1078873 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent
+============================================================
+  Recall@10  : 0.0341
+  Recall@100 : 0.1908
+  nDCG@10    : 0.4313
+
+[agent] Improvement: Val  recall@100 0.1848 → 0.1908 (+0.0060)
+[agent] Results saved → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/results/claude-sonnet-4-6/agent_20260505_053237.json
+[agent] Results copy → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_023138/results.json
+[agent] BM25 server stopped.
+
+============================================================
+  SPLIT: paper_retrieval
+============================================================
+>>> removed .bm25_cache/
+>>> reset src/agents/analysis_code_agent/preprocess.py <- DEFAULT_CODE_COPY_FROM_HERE.txt
+>>> uv run python main.py --agent analysis_code_agent --loops 3 --condition agent --split paper_retrieval
+[data] Corpus: 363133 docs (6199 gold + 356934 non-gold), 14 val queries, 65 eval queries
+
+============================================================
+  Split       : paper_retrieval
+  Documents   : 363133
+  Val queries : 14
+  Eval queries: 65
+============================================================
+
+[agent] Starting BM25 server on port 8765 ...
+[agent] BM25 server ready (took 1.0s).
+
+############################################################
+# Baseline (raw documents, no preprocessing) — computed on current corpus
+############################################################
+[agent] Baseline: 363133 chunks from 363133 docs
+[agent] Baseline: 363133 chunks from 363133 docs
+  Eval Recall@100 : 0.3234
+  Eval nDCG@10    : 0.6607
+[agent] Experiment logs → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725
+
+############################################################
+# Loop 1 / 3
+############################################################
+[agent] Preprocessing 363133 documents ...
+[agent] Built 363133 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 0)
+============================================================
+  Recall@10  : 0.0715
+  Recall@100 : 0.3234
+  nDCG@10    : 0.6607
+
+[agent] Loop 1 starting Eval recall@100: 0.3234 (global best: 0.3234)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 363133 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 14 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_0_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_ideas_2026-05-05T06:11:21.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H2_2026-05-05T06:11:36.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H1_2026-05-05T06:11:45.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H3_2026-05-05T06:11:57.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H4_2026-05-05T06:14:18.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Title Repetition with Synonym Expansion
+[code_agent] H1: delta_recall@100=-0.0269 delta_recall@10=-0.0035 delta_ndcg@10=-0.0208 proven=False
+[agent] Testing H2: Abstract-Only Chunk as Second Chunk (Strip Boilerplate Headers)
+[code_agent] H2: delta_recall@100=+0.0053 delta_recall@10=-0.0011 delta_ndcg@10=-0.0020 proven=True
+[agent] Testing H3: N-gram Phrase Concatenation for Key Technical Terms
+[code_agent] H3 error: preprocess() timed out after 900s
+[agent] Testing H4: Category-to-Domain-Vocabulary Expansion
+[code_agent] H4: delta_recall@100=-0.0090 delta_recall@10=-0.0022 delta_ndcg@10=-0.0087 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_0_hypotheses.json
+[agent] Best hypothesis: H2 val_recall@100=0.3626 (Δ+0.0053 vs val current, val baseline=0.3573)
+[agent] Adopting H2 directly.
+[agent] Final code log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_0_final_code.py
+[agent] preprocess.py updated (101 lines).
+[agent] Running authoritative harness eval on adopted code ...
+[agent] Preprocessing 363133 documents ...
+[agent] Built 620559 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 1)
+============================================================
+  Recall@10  : 0.0717
+  Recall@100 : 0.3248
+  nDCG@10    : 0.6650
+
+[agent] Adopted Eval recall@100=0.3248 (global best so far: 0.3234)
+[agent] Global best updated → eval recall@100=0.3248
+
+############################################################
+# Loop 2 / 3
+############################################################
+[agent] Preprocessing 363133 documents ...
+[agent] Built 620559 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 2)
+============================================================
+  Recall@10  : 0.0717
+  Recall@100 : 0.3248
+  nDCG@10    : 0.6650
+
+[agent] Loop 2 starting Eval recall@100: 0.3248 (global best: 0.3248)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 620559 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 14 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_1_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_ideas_2026-05-05T06:43:57.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H1_2026-05-05T06:44:02.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H4_2026-05-05T06:44:13.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H2_2026-05-05T06:44:22.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H3_2026-05-05T06:45:49.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Simplify to Single Full-Text Chunk (Remove Abstract Extraction)
+[code_agent] H1: delta_recall@100=-0.0053 delta_recall@10=+0.0011 delta_ndcg@10=+0.0020 proven=False
+[agent] Testing H2: Prepend Title (Extracted from Document Text) to Chunk Text
+[code_agent] H2: delta_recall@100=-0.0216 delta_recall@10=-0.0016 delta_ndcg@10=-0.0169 proven=False
+[agent] Testing H3: Synonym/Vocabulary Expansion via Term Normalization for Technical Jargon
+[code_agent] H3: delta_recall@100=-0.0181 delta_recall@10=-0.0008 delta_ndcg@10=-0.0027 proven=False
+[agent] Testing H4: Complete Rewrite — Single Chunk with Structured Field Concatenation
+[code_agent] H4: delta_recall@100=-0.0213 delta_recall@10=+0.0000 delta_ndcg@10=-0.0103 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_1_hypotheses.json
+[agent] Best hypothesis: H1 val_recall@100=0.3573 (Δ-0.0053 vs val current, val baseline=0.3626)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Loop 3 / 3
+############################################################
+[agent] Preprocessing 363133 documents ...
+[agent] Built 620559 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent (Iteration 4)
+============================================================
+  Recall@10  : 0.0717
+  Recall@100 : 0.3248
+  nDCG@10    : 0.6650
+
+[agent] Loop 3 starting Eval recall@100: 0.3248 (global best: 0.3248)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 620559 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 14 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_2_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_ideas_2026-05-05T07:03:13.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H3_2026-05-05T07:03:28.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H4_2026-05-05T07:03:29.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H1_2026-05-05T07:03:38.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/code_generate_code_H2_2026-05-05T07:04:03.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Title-Repetition Chunk (Emphasize Title Terms)
+[code_agent] H1: delta_recall@100=-0.0215 delta_recall@10=-0.0009 delta_ndcg@10=-0.0198 proven=False
+[agent] Testing H2: Synonym/Acronym Expansion via Inline Injection
+[code_agent] H2: delta_recall@100=-0.0049 delta_recall@10=-0.0016 delta_ndcg@10=-0.0113 proven=False
+[agent] Testing H3: Replace Abstract Chunk with Title + First-Sentence-Per-Paragraph Summary
+[code_agent] H3: delta_recall@100=-0.0143 delta_recall@10=+0.0006 delta_ndcg@10=-0.0108 proven=False
+[agent] Testing H4: Categories-as-Boost Chunk (Repeat Category Tags with Abstract)
+[code_agent] H4: delta_recall@100=-0.0052 delta_recall@10=+0.0000 delta_ndcg@10=-0.0011 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/iteration_2_hypotheses.json
+[agent] Best hypothesis: H2 val_recall@100=0.3578 (Δ-0.0049 vs val current, val baseline=0.3626)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Final eval (after 3 loops)
+############################################################
+[agent] Preprocessing 363133 documents ...
+[agent] Built 620559 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent
+============================================================
+  Recall@10  : 0.0717
+  Recall@100 : 0.3248
+  nDCG@10    : 0.6650
+
+
+[agent] Improvement: Eval recall@100 0.3234 → 0.3248 (+0.0014)
+[agent] Preprocessing 363133 documents ...
+[agent] Built 620559 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : analysis_code_agent
+============================================================
+  Recall@10  : 0.0760
+  Recall@100 : 0.3626
+  nDCG@10    : 0.6669
+
+[agent] Improvement: Val  recall@100 0.3573 → 0.3626 (+0.0053)
+[agent] Results saved → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/results/claude-sonnet-4-6/agent_20260505_071431.json
+[agent] Results copy → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_claude-sonnet-4-6_agent_20260505_060725/results.json
+[agent] BM25 server stopped.
