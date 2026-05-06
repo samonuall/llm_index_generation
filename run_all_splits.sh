@@ -1,15 +1,64 @@
-#!/usr/bin/env bash
-# run_all_splits.sh — Run agent_history over all CRUMB splits sequentially.
-#
-# Usage:
-#   bash run_all_splits.sh                                              # default model from config.yaml
-#   bash run_all_splits.sh --model gemini/gemini-2.5-pro               # Gemini direct
-#   bash run_all_splits.sh --model openai/gpt-4o-mini --api-base https://thekeymaker.umass.edu/
-#
-# Results are appended to results/<model>/ as each split finishes.
-# To run only specific splits, edit SPLITS below.
+#!/bin/bash
+#SBATCH --job-name=throwaway_merge_test
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.err
+#SBATCH --time=12:00:00
+#SBATCH --mem=150G
+#SBATCH --cpus-per-task=12
+#SBATCH --partition=cpu
+
 
 set -euo pipefail
+
+# Always run from the repo root (fixed path)
+REPO_DIR="/work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation"
+cd "$REPO_DIR"
+
+# Preflight: ensure repo is writable (results/, ablation_experiments/, caches, etc.)
+if ! ( : > .slurm_write_test 2>/dev/null ); then
+    echo "ERROR: repo root is not writable on this node: $REPO_DIR" >&2
+    echo "  Fix: copy the repo to a writable filesystem (e.g. $HOME or $SCRATCH) and sbatch from there." >&2
+    exit 1
+fi
+rm -f .slurm_write_test
+
+# Mirror all output to a stable logs/ folder (Slurm still writes slurm-*.out/err)
+# Prefer writing inside the repo, but fall back if the repo is read-only on compute nodes.
+_pick_log_dir() {
+    local candidates=(
+        "$REPO_DIR/run_splits_logs"
+        "${SLURM_SUBMIT_DIR:-}/run_splits_logs"
+        "${HOME:-}/run_splits_logs"
+        "${TMPDIR:-}/run_splits_logs"
+        "/tmp/run_splits_logs"
+    )
+    for d in "${candidates[@]}"; do
+        [[ -z "$d" ]] && continue
+        mkdir -p "$d" 2>/dev/null && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+LOG_DIR="$(_pick_log_dir)" || {
+    echo "ERROR: could not create any run_splits_logs directory (repo may be read-only)." >&2
+    exit 1
+}
+
+LOG_FILE="$LOG_DIR/run_all_splits_${SLURM_JOB_ID:-nojob}_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "Logging to: $LOG_FILE"
+
+# ── Sanity checks ───────────────────────────────────────────────────────────
+if ! command -v uv >/dev/null 2>&1; then
+    echo "ERROR: 'uv' not found in PATH on this node."
+    echo "  Fix: load your modules / activate env so 'uv' is available, then re-submit."
+    exit 127
+fi
+
+if [ ! -f ".env" ]; then
+    echo "WARNING: .env not found in repo root ($REPO_DIR/.env)."
+    echo "  Agents typically load it via python-dotenv; alternatively export keys in the job environment."
+fi
 
 # ── Splits to run ────────────────────────────────────────────────────────────
 SPLITS=(
@@ -73,4 +122,4 @@ echo "=============================================="
 if [ ${#FAILED[@]} -gt 0 ]; then
     echo "  Skipped/failed: ${FAILED[*]}"
 fi
-ls -lt results/**/*.json results/*.json 2>/dev/null | head -20
+ls -lt results/**/*.json results/*.json 2>/dev/null | head -20 || true

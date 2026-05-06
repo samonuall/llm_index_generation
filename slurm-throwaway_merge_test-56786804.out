@@ -1,0 +1,150 @@
+Logging to: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/run_splits_logs/run_all_splits_56786804_20260506_041613.log
+
+==============================================
+  SPLIT: tip_of_the_tongue
+==============================================
+
+==============================================
+  CRUMB split : tip_of_the_tongue
+  50 val queries, 100 eval queries, 231852 docs cached
+==============================================
+
+==============================================
+  RUNNING: agent_history  [split=tip_of_the_tongue]
+==============================================
+
+>>> Resetting preprocess.py to baseline...
+[data] Corpus: 231852 docs (149 gold + 231703 non-gold), 50 val queries, 100 eval queries
+
+============================================================
+  Split       : tip_of_the_tongue
+  Documents   : 231852
+  Val queries : 50
+  Eval queries: 100
+============================================================
+
+[agent] Starting BM25 server on port 8765 ...
+[agent] BM25 server ready (took 5.5s).
+
+############################################################
+# Baseline (raw documents, no preprocessing) — computed on current corpus
+############################################################
+[agent] Baseline: 231852 chunks from 231852 docs
+[agent] Baseline: 231852 chunks from 231852 docs
+  Eval Recall@100 : 0.2500
+  Eval nDCG@10    : 0.1195
+[agent] Experiment logs → /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848
+
+############################################################
+# Loop 1 / 5
+############################################################
+[agent] Preprocessing 231852 documents ...
+[agent] Built 231852 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : baseline (Iteration 0)
+============================================================
+  Recall@10  : 0.1700
+  Recall@100 : 0.2500
+  nDCG@10    : 0.1195
+
+[agent] Loop 1 starting Eval recall@100: 0.2500 (global best: 0.2500)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 231852 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 50 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/iteration_0_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_ideas_2026-05-06T04:40:50.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H3_2026-05-06T04:40:51.log
+[code_agent] No code block found for H3
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H2_2026-05-06T04:40:52.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H1_2026-05-06T04:40:55.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H4_2026-05-06T04:41:03.log
+[code_agent] Phase 2: 3/4 hypotheses generated successfully.
+[agent] Generated 3 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Add Section-Level Chunking with Prominent Heading Inclusion
+[code_agent] H1 validation error: missing ), unterminated subpattern at position 1
+[agent] Testing H2: Prepend Document Title/Subject Marker to Each Chunk
+[code_agent] H2: delta_recall@100=+0.0000 delta_recall@10=+0.0000 delta_ndcg@10=+0.0000 proven=False
+[agent] Testing H4: Implement Title and Plot Summary Co-Embedding Strategy
+[code_agent] H4 error: preprocess() timed out after 900s
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/iteration_0_hypotheses.json
+[agent] Best hypothesis: H2 val_recall@100=0.1600 (Δ+0.0000 vs val current, val baseline=0.1600)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Loop 2 / 5
+############################################################
+[agent] Preprocessing 231852 documents ...
+[agent] Built 231852 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : baseline (Iteration 2)
+============================================================
+  Recall@10  : 0.1700
+  Recall@100 : 0.2500
+  nDCG@10    : 0.1195
+
+[agent] Loop 2 starting Eval recall@100: 0.2500 (global best: 0.2500)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 231852 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 50 val query results.
+[agent] Running analysis agent on validation data...
+[agent] Analysis log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/iteration_1_analysis.log
+[agent] Generating 4 hypotheses ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_ideas_2026-05-06T05:15:12.log
+[code_agent] Phase 1: generated 4 hypothesis ideas, generating code in parallel ...
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H3_2026-05-06T05:15:15.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H4_2026-05-06T05:15:16.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H2_2026-05-06T05:15:17.log
+[code_agent] Log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/code_generate_code_H1_2026-05-06T05:15:17.log
+[code_agent] Phase 2: 4/4 hypotheses generated successfully.
+[agent] Generated 4 hypotheses.
+[agent] Testing hypotheses on validation queries ...
+[agent] Testing H1: Extract and Index Key Phrase Clusters from Structured Content
+[code_agent] H1: delta_recall@100=+0.0000 delta_recall@10=+0.0400 delta_ndcg@10=+0.0209 proven=False
+[agent] Testing H2: Normalize Terminology via Stemming-Augmented Section Headers
+[code_agent] H2: delta_recall@100=-0.0200 delta_recall@10=+0.0000 delta_ndcg@10=+0.0082 proven=False
+[agent] Testing H3: Identify and Prioritize Introductory Paragraphs as Separate Chunks
+[code_agent] H3 validation error: invalid syntax (<string>, line 42)
+[agent] Testing H4: Replicate Genre/Theme Indicators Across Multiple Content Segments
+[code_agent] H4: delta_recall@100=-0.1400 delta_recall@10=-0.0800 delta_ndcg@10=-0.0415 proven=False
+[agent] Hypotheses log: /work/pi_dagarwal_umass_edu/project_13/sam/llm_index_generation/ablation_experiments/openai_qwen3-coder-30b-a3b_agent_history_20260506_042848/iteration_1_hypotheses.json
+[agent] Best hypothesis: H1 val_recall@100=0.1600 (Δ+0.0000 vs val current, val baseline=0.1600)
+[agent] No hypothesis improved val recall over current — preprocess.py unchanged.
+
+############################################################
+# Loop 3 / 5
+############################################################
+[agent] Preprocessing 231852 documents ...
+[agent] Built 231852 chunks. Pushing to BM25 server ...
+
+============================================================
+Agent       : baseline (Iteration 4)
+============================================================
+  Recall@10  : 0.1700
+  Recall@100 : 0.2500
+  nDCG@10    : 0.1195
+
+[agent] Loop 3 starting Eval recall@100: 0.2500 (global best: 0.2500)
+[agent] Building 'current' index on BM25 server ...
+[agent] 'current' index built with 231852 chunks.
+[agent] Enriching eval results with validation per-query data ...
+[agent] Enriched with 50 val query results.
+[agent] Running analysis agent on validation data...[nltk_data] Downloading package wordnet to
+[nltk_data]     /home/sonuallain_umass_edu/nltk_data...
+[nltk_data]   Package wordnet is already up-to-date!
+[nltk_data] Downloading package omw-1.4 to
+[nltk_data]     /home/sonuallain_umass_edu/nltk_data...
+[nltk_data]   Package omw-1.4 is already up-to-date!
+[nltk_data] Downloading package wordnet to
+[nltk_data]     /home/sonuallain_umass_edu/nltk_data...
+[nltk_data]   Package wordnet is already up-to-date!
+[nltk_data] Downloading package omw-1.4 to
+[nltk_data]     /home/sonuallain_umass_edu/nltk_data...
+[nltk_data]   Package omw-1.4 is already up-to-date!

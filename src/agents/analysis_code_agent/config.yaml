@@ -1,8 +1,9 @@
-analysis_model: "openai/claude-sonnet-4-6"
+analysis_model: "openai/qwen3-coder-30b-a3b"
 analysis_temperature: 1.0
-code_model: "openai/claude-sonnet-4-6"
-code_temperature: 0.0
+code_model: "openai/qwen3-coder-30b-a3b"
+code_temperature: 1.0
 api_base: "https://thekeymaker.umass.edu/"
+n_loops: 5
 
 server_port: 8765
 server_persist_dir: ".bm25_cache"
@@ -15,8 +16,8 @@ max_distractors: null            # No limits
 
 max_hypotheses: 4
 recall_improvement_threshold: 0.00001
-analysis_max_turns: 10
-min_tool_turns: 5
+analysis_max_turns: 5
+min_tool_turns: 3
 use_tools: true
 
 # How many candidate cases the analysis agent sees in its initial context.

@@ -1,22 +1,33 @@
-import sys, pathlib
+"""
+Baseline preprocessor: one chunk per document, raw text, no modification.
+
+This is the simplest possible strategy and serves as a performance floor.
+All other agents should beat it.
+"""
+
+from __future__ import annotations
+
+import sys
+import pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "evaluation"))
 
 from typing import List
+
 from schema import Document, Chunk
 from base import BasePreprocessor
 
+
 class Preprocessor(BasePreprocessor):
-    name = "analysis_code_agent"  # MUST BE EXACTLY THIS - DO NOT MODIFY
-    description = "starting preprocessor that does a simple passthrough."
+    name = "baseline"
+    description = "Passthrough – one chunk per document, raw text, no modification."
 
     def preprocess(self, docs: List[Document]) -> List[Chunk]:
-        chunks = []
-        for doc in docs:
-            chunk_id = f"{doc.doc_id}_0"
-            chunks.append(Chunk(
-                chunk_id=chunk_id,
+        return [
+            Chunk(
+                chunk_id=f"{doc.doc_id}_0",
                 doc_id=doc.doc_id,
-                text=augmented_text,
-                metadata=doc.metadata
-            ))
-        return chunks
+                text=doc.text,
+            )
+            for doc in docs
+        ]
