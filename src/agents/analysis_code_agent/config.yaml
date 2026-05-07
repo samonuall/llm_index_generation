@@ -1,14 +1,15 @@
-analysis_model: "openai/qwen3-coder-30b-a3b"
+analysis_model: "qwen/qwen3-coder"
 analysis_temperature: 1.0
-code_model: "openai/qwen3-coder-30b-a3b"
+code_model: "qwen/qwen3-coder"
 code_temperature: 1.0
-api_base: "https://thekeymaker.umass.edu/"
+api_base: "https://openrouter.ai/api/v1"
 n_loops: 5
 
 server_port: 8765
 server_persist_dir: ".bm25_cache"
 server_startup_timeout: 300      # 5 minutes - safe for large indexes
 preprocess_timeout_seconds: 900  # 15 minutes - middle ground
+validation_timeout_seconds: 30   # 30s budget for the 20-doc validation pre-check
 bm25_batch_size: 100000          # Good balance
 
 corpus_size: null                # Full corpus
