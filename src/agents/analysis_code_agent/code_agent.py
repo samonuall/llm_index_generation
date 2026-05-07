@@ -9,7 +9,6 @@ import re
 import json
 import pathlib
 import time
-import concurrent.futures
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -66,7 +65,7 @@ class CodeAgent:
         self._temperature = config.get("code_temperature", 0.7)
         self._api_base = config.get("api_base")  # None = use provider's native endpoint
         # Only pass api_key explicitly for proxy; native providers read key from env.
-        _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+        _proxy_key = os.environ.get("OPENROUTER_API_KEY", "")
         self._api_key = _proxy_key if self._api_base else None
         self._llm_timeout = config.get("code_llm_timeout", None)
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)
@@ -682,13 +681,17 @@ from base import BasePreprocessor
 
     def _validate_code(self, code: str, documents: list) -> str | None:
         """Quick exec + preprocess on a tiny sample. Returns error string or None if OK."""
-        from .eval_utils import load_preprocessor_from_code, sanitize_docs_for_preprocessing, remap_chunk_doc_ids
+        from .eval_utils import (
+            sanitize_docs_for_preprocessing,
+            remap_chunk_doc_ids,
+            run_preprocess_with_timeout,
+        )
         try:
             sample = documents[:20]
             sanitized_sample, reverse_map = sanitize_docs_for_preprocessing(sample)
             valid_doc_ids = {d.doc_id for d in sanitized_sample}
-            preprocessor = load_preprocessor_from_code(code)
-            chunks = preprocessor.preprocess(sanitized_sample)
+            validation_timeout = self._config.get("validation_timeout_seconds", 30)
+            chunks = run_preprocess_with_timeout(code, sanitized_sample, validation_timeout)
             if not chunks:
                 return "preprocess() returned empty list on sample docs"
             for c in chunks:
@@ -716,7 +719,7 @@ from base import BasePreprocessor
         client,
     ) -> HypothesisResult:
         """Test a single hypothesis by building a temp index and running subset eval."""
-        from .eval_utils import load_preprocessor_from_code, run_subset_eval
+        from .eval_utils import run_subset_eval
 
         result = HypothesisResult(hypothesis=hypothesis)
         index_name = f"hyp_{hypothesis.id}"
@@ -740,22 +743,19 @@ from base import BasePreprocessor
             # Always test on all queries for reliable delta measurement.
             test_queries = queries
 
-            # Load hypothesis preprocessor and run with timeout
-            from .eval_utils import sanitize_docs_for_preprocessing, remap_chunk_doc_ids
-            preprocessor = load_preprocessor_from_code(hypothesis.code)
+            # Run hypothesis preprocess() in a child process with a hard wall-clock
+            # timeout. multiprocessing is required because Python threads cannot be
+            # killed — a thread-based timeout leaves zombie work running indefinitely.
+            from .eval_utils import (
+                sanitize_docs_for_preprocessing,
+                remap_chunk_doc_ids,
+                run_preprocess_with_timeout,
+            )
             sanitized_docs, reverse_map = sanitize_docs_for_preprocessing(documents)
-            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = ex.submit(preprocessor.preprocess, sanitized_docs)
-            try:
-                chunks = future.result(timeout=preprocess_timeout)
-                remap_chunk_doc_ids(chunks, reverse_map)
-            except concurrent.futures.TimeoutError:
-                # Avoid blocking indefinitely on shutdown if preprocess() is still running.
-                ex.shutdown(wait=False, cancel_futures=True)
-                raise RuntimeError(f"preprocess() timed out after {preprocess_timeout}s")
-            else:
-                # Normal completion: wait for worker thread to finish cleanly.
-                ex.shutdown(wait=True)
+            chunks = run_preprocess_with_timeout(
+                hypothesis.code, sanitized_docs, preprocess_timeout
+            )
+            remap_chunk_doc_ids(chunks, reverse_map)
 
             # Build hypothesis index on server
             client.build_index(index_name, chunks, persist=False)

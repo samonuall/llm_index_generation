@@ -168,3 +168,62 @@ def load_preprocessor_from_code(code: str):
     module.__file__ = fake_path
     exec(code, module.__dict__)
     return module.Preprocessor()
+
+
+def _preprocess_worker(code, docs, output_path):
+    import pickle, traceback, os
+    try:
+        preprocessor = load_preprocessor_from_code(code)
+        chunks = preprocessor.preprocess(docs)
+        tmp = output_path + ".tmp"
+        with open(tmp, "wb") as f:
+            pickle.dump(("ok", chunks), f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.rename(tmp, output_path)
+    except BaseException as e:
+        try:
+            with open(output_path, "wb") as f:
+                pickle.dump(("error", repr(e), traceback.format_exc()), f)
+        except Exception:
+            pass
+
+
+def run_preprocess_with_timeout(code: str, docs: list, timeout: float) -> list:
+    """Run an untrusted preprocess() in a child process with a hard wall-clock timeout.
+
+    Raises TimeoutError("preprocess() timed out after Ns") on timeout — the worker
+    is killed via SIGTERM/SIGKILL so it cannot leak GIL-holding work into the parent.
+    Linux only: uses fork() for cheap copy-on-write of docs / spaCy models.
+    """
+    import multiprocessing as mp
+    import pickle, tempfile, os, signal
+    ctx = mp.get_context("fork")
+    with tempfile.TemporaryDirectory(prefix="preprocess_") as tdir:
+        out_path = os.path.join(tdir, "result.pkl")
+        proc = ctx.Process(target=_preprocess_worker, args=(code, docs, out_path))
+        proc.start()
+        proc.join(timeout=timeout)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=5)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+            raise TimeoutError(f"preprocess() timed out after {int(timeout)}s")
+        if not os.path.exists(out_path):
+            sig_name = ""
+            if proc.exitcode is not None and proc.exitcode < 0:
+                try:
+                    sig_name = f" (killed by {signal.Signals(-proc.exitcode).name})"
+                except Exception:
+                    pass
+            raise RuntimeError(
+                f"preprocess() worker exited with code {proc.exitcode}{sig_name}"
+            )
+        try:
+            with open(out_path, "rb") as f:
+                result = pickle.load(f)
+        except (EOFError, pickle.UnpicklingError) as e:
+            raise RuntimeError(f"preprocess() worker output truncated: {e}")
+        if result[0] == "error":
+            raise RuntimeError(f"preprocess() raised: {result[1]}")
+        return result[1]
