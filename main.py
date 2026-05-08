@@ -94,6 +94,16 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Reset analysis_code_agent/preprocess.py to clean baseline at the start of every run.
+    if args.agent in ("analysis_code_agent", "one_shot"):
+        import shutil, pathlib
+        repo_root = pathlib.Path(__file__).parent
+        clean = repo_root / "src" / "agents" / "baseline" / "preprocess.py"
+        target = repo_root / "src" / "agents" / "analysis_code_agent" / "preprocess.py"
+        shutil.copy(clean, target)
+        print(f"[main] Reset preprocess.py from clean baseline: {clean}")
+
+
     if args.agent == "gemini_sdk":
         from src.agents import GeminiSdkAgent
         agent = GeminiSdkAgent(include_query_text=not args.no_query_text)
