@@ -38,6 +38,28 @@ esac
 echo ""
 echo "Selected model: $MODEL"
 echo ""
+echo "Available Conditions:"
+echo "[1] agent              - loop + analysis, no history, no contrastive"
+echo "[2] agent_history      - loop + analysis + history of past hypotheses"
+echo "[3] agent_contrastive  - loop + analysis + history + per-query contrastive table"
+echo "[4] agent_noinput      - loop only, NO analysis, NO feedback, NO numbers"
+echo ""
+read -p "Select condition (1-4): " condition_selection
+
+case $condition_selection in
+    1) CONDITION="agent" ;;
+    2) CONDITION="agent_history" ;;
+    3) CONDITION="agent_contrastive" ;;
+    4) CONDITION="agent_noinput" ;;
+    *)
+        echo "Invalid condition selection. Exiting."
+        exit 1
+        ;;
+esac
+
+echo ""
+echo "Selected condition: $CONDITION"
+echo ""
 echo "Available Datasets:"
 echo ""
 printf "%-5s %-35s %-12s %-10s %-8s %-10s %-6s\n" "NUM" "DATASET" "DOCS" "QUERIES" "MEMORY" "TIME" "CPUS"
@@ -69,18 +91,19 @@ mkdir -p ablation_slurm
 submit_job() {
     local spec=$1
     local model=$2
+    local condition=$3
     IFS='|' read -r name docs queries mem time cpus <<< "$spec"
-    
+
     echo ""
-    echo "Submitting: $name (model: $model)"
+    echo "Submitting: $name (model: $model, condition: $condition)"
     echo "  Documents: $docs | Queries: $queries"
     echo "  Resources: ${mem} RAM, ${cpus} CPUs, ${time}"
-    
-    cat > ablation_slurm/run_${name}_${model}.slurm << SLURM_EOF
+
+    cat > ablation_slurm/run_${name}_${model}_${condition}.slurm << SLURM_EOF
 #!/bin/bash
-#SBATCH --job-name=llm_${name}_${model}
-#SBATCH --output=ablation_slurm/${name}_${model}_%j.out
-#SBATCH --error=ablation_slurm/${name}_${model}_%j.err
+#SBATCH --job-name=llm_${name}_${model}_${condition}
+#SBATCH --output=ablation_slurm/${name}_${model}_${condition}_%j.out
+#SBATCH --error=ablation_slurm/${name}_${model}_${condition}_%j.err
 #SBATCH --time=${time}
 #SBATCH --mem=${mem}
 #SBATCH --cpus-per-task=${cpus}
@@ -103,8 +126,8 @@ ls -1 results/*/*.json 2>/dev/null | sort > "\$RESULTS_BEFORE"
 
 # Run the agent with specified model — capture wall time at the bash layer
 START_EPOCH=\$(date +%s)
-echo "[runtime] start=\$(date -u +%Y-%m-%dT%H:%M:%SZ) split=${name} model=${model}"
-uv run python main.py --agent analysis_code_agent --loops 3 --condition agent_history --split ${name} --model ${model}
+echo "[runtime] start=\$(date -u +%Y-%m-%dT%H:%M:%SZ) split=${name} model=${model} condition=${condition}"
+uv run python main.py --agent analysis_code_agent --loops 3 --condition ${condition} --split ${name} --model ${model}
 EXIT_CODE=\$?
 END_EPOCH=\$(date +%s)
 ELAPSED=\$((END_EPOCH - START_EPOCH))
@@ -143,23 +166,23 @@ fi
 echo "Job completed at \$(date)"
 SLURM_EOF
 
-    sbatch ablation_slurm/run_${name}_${model}.slurm
-    echo "  ✓ Submitted as ablation_slurm/run_${name}_${model}.slurm"
+    sbatch ablation_slurm/run_${name}_${model}_${condition}.slurm
+    echo "  ✓ Submitted as ablation_slurm/run_${name}_${model}_${condition}.slurm"
 }
 
 # Process selection
 if [[ "$selection" == "9" ]]; then
     echo ""
-    echo "Submitting ALL datasets with model: $MODEL..."
+    echo "Submitting ALL datasets with model: $MODEL, condition: $CONDITION ..."
     for spec in "${DATASET_SPECS[@]}"; do
-        submit_job "$spec" "$MODEL"
+        submit_job "$spec" "$MODEL" "$CONDITION"
         sleep 0.5
     done
 else
     for num in $selection; do
         if [[ $num -ge 1 && $num -le ${#DATASET_SPECS[@]} ]]; then
             idx=$((num-1))
-            submit_job "${DATASET_SPECS[$idx]}" "$MODEL"
+            submit_job "${DATASET_SPECS[$idx]}" "$MODEL" "$CONDITION"
             sleep 0.5
         else
             echo "Invalid selection: $num"
@@ -169,7 +192,7 @@ fi
 
 echo ""
 echo "=========================================="
-echo "All jobs submitted with model: $MODEL"
+echo "All jobs submitted with model: $MODEL, condition: $CONDITION"
 echo ""
 echo "Monitor with:"
 echo "  squeue -u \$USER"
@@ -177,5 +200,5 @@ echo "  watch -n 5 'squeue -u \$USER'"
 echo ""
 echo "Check logs:"
 echo "  ls -lth ablation_slurm/"
-echo "  tail -f ablation_slurm/<dataset>_${MODEL}_*.out"
+echo "  tail -f ablation_slurm/<dataset>_${MODEL}_${CONDITION}_*.out"
 echo "=========================================="

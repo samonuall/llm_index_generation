@@ -147,7 +147,7 @@ def _load_data(split: str = "tip_of_the_tongue", corpus_size: int | None = None,
 class AnalysisCodeAgent(AgentRunner):
     agent_name = "analysis_code_agent"
 
-    def __init__(self, use_history: bool = True, use_contrastive: bool = True, model: str | None = None, api_base: str | None = None) -> None:
+    def __init__(self, use_history: bool = True, use_contrastive: bool = True, use_analysis: bool = True, model: str | None = None, api_base: str | None = None) -> None:
         overrides: dict = {}
         if model:
             overrides["analysis_model"] = model
@@ -160,6 +160,7 @@ class AnalysisCodeAgent(AgentRunner):
         self._config = _load_config(overrides or None)
         self._use_history = use_history
         self._use_contrastive = use_contrastive
+        self._use_analysis = use_analysis
         self._server_process = None
         self._client = BM25Client(
             base_url=f"http://localhost:{self._config.get('server_port', 8765)}",
@@ -438,6 +439,8 @@ class AnalysisCodeAgent(AgentRunner):
 
     @property
     def condition(self) -> str:
+        if not self._use_analysis:
+            return "agent_noinput"
         if self._use_history and self._use_contrastive:
             return "agent_contrastive"
         if self._use_history:
@@ -601,50 +604,58 @@ class AnalysisCodeAgent(AgentRunner):
                 print(f"[agent] Index build failed: {e}")
                 continue
 
-            # Enrich eval results with per-query data from BM25 server FOR VALIDATION
-            print("[agent] Enriching eval results with validation per-query data ...")
-            try:
-                from .eval_utils import run_subset_eval
-                val_summary = run_subset_eval("current", val_queries, self._client, top_k=100)
-                val_raw_results = {
-                    "metrics": {
-                        "recall_at_10": val_summary.recall_at_10,
-                        "recall_at_100": val_summary.recall_at_100,
-                        "ndcg_at_10": val_summary.ndcg_at_10,
+            # Enrich eval results with per-query data, record journal, and run analysis.
+            # All three are skipped for agent_noinput: val per-query data only feeds analysis
+            # + journal, and journal is only consulted when use_history is on (also off here).
+            val_raw_results: dict | None = None
+            if self._use_analysis:
+                print("[agent] Enriching eval results with validation per-query data ...")
+                try:
+                    from .eval_utils import run_subset_eval
+                    val_summary = run_subset_eval("current", val_queries, self._client, top_k=100)
+                    val_raw_results = {
+                        "metrics": {
+                            "recall_at_10": val_summary.recall_at_10,
+                            "recall_at_100": val_summary.recall_at_100,
+                            "ndcg_at_10": val_summary.ndcg_at_10,
+                        }
                     }
-                }
-                val_raw_results = self._enrich_eval_results(val_raw_results, val_queries, self._client)
-                print(f"[agent] Enriched with {len(val_raw_results.get('query_results', []))} val query results.")
-                val_log = self._experiment_dir / f"iteration_{i}_val.json"
-                val_log.write_text(json.dumps(val_raw_results, indent=2, default=str), encoding="utf-8")
-            except Exception as e:
-                logger.exception("Val Enrichment failed on loop %d", i + 1)
-                print(f"[agent] Val Enrichment failed: {e}")
-                continue
+                    val_raw_results = self._enrich_eval_results(val_raw_results, val_queries, self._client)
+                    print(f"[agent] Enriched with {len(val_raw_results.get('query_results', []))} val query results.")
+                    val_log = self._experiment_dir / f"iteration_{i}_val.json"
+                    val_log.write_text(json.dumps(val_raw_results, indent=2, default=str), encoding="utf-8")
+                except Exception as e:
+                    logger.exception("Val Enrichment failed on loop %d", i + 1)
+                    print(f"[agent] Val Enrichment failed: {e}")
+                    continue
 
-            # Record iteration in journal with both val and eval metrics
-            journal.record_iteration(
-                iteration=i,
-                eval_results=val_raw_results,
-                eval_results_harness=raw_results,
-            )
-
-            # Analysis agent uses validation results
-            print("[agent] Running analysis agent on validation data...")
-            try:
-                analysis_result = analysis_agent.analyze(
+                # Record iteration in journal with both val and eval metrics
+                journal.record_iteration(
+                    iteration=i,
                     eval_results=val_raw_results,
-                    baseline_results=val_baseline_results,
-                    current_code=current_code,
-                    client=self._client,
-                    split=self.split,
-                    journal_summary=journal.summary_for_prompt() if self._use_history else None,
+                    eval_results_harness=raw_results,
                 )
-                self._log_analysis(i, analysis_result)
-            except Exception as e:
-                logger.exception("Analysis agent failed on loop %d", i + 1)
-                print(f"[agent] Analysis failed: {e}")
-                continue
+
+                # Analysis agent uses validation results
+                print("[agent] Running analysis agent on validation data...")
+                try:
+                    analysis_result = analysis_agent.analyze(
+                        eval_results=val_raw_results,
+                        baseline_results=val_baseline_results,
+                        current_code=current_code,
+                        client=self._client,
+                        split=self.split,
+                        journal_summary=journal.summary_for_prompt() if self._use_history else None,
+                    )
+                    self._log_analysis(i, analysis_result)
+                    analysis_summary = analysis_result.summary
+                except Exception as e:
+                    logger.exception("Analysis agent failed on loop %d", i + 1)
+                    print(f"[agent] Analysis failed: {e}")
+                    continue
+            else:
+                analysis_summary = ""
+                print("[agent] Skipping val enrichment, journal recording, and analysis (condition=agent_noinput).")
 
             # Hypothesis generation uses val queries.
             # NOTE: persistent_failure_ids is intentionally not passed any more —
@@ -653,7 +664,7 @@ class AnalysisCodeAgent(AgentRunner):
             print(f"[agent] Generating {max_hypotheses} hypotheses ...")
             query_lookup = {q.query_id: q.query_text for q in val_queries} if self._use_contrastive else None
             hypotheses = asyncio.run(code_agent.generate_hypotheses_async(
-                analysis_result.summary,
+                analysis_summary,
                 current_code,
                 n=max_hypotheses,
                 past_hypotheses=all_past_hypotheses if (all_past_hypotheses and self._use_history) else None,
@@ -740,7 +751,7 @@ class AnalysisCodeAgent(AgentRunner):
                 if len(proven_results) > 1:
                     print(f"[agent] {len(proven_results)} hypotheses proved — attempting synthesis ...")
                     synthesized = code_agent.generate_final_code(
-                        analysis_result.summary, proven_results, current_code
+                        analysis_summary, proven_results, current_code
                     )
                     if synthesized:
                         val_err = code_agent._validate_code(synthesized, documents)

@@ -174,10 +174,8 @@ class CodeAgent:
         # fixate on a handful of unfixable cases and produce non-generalising
         # hypotheses. The argument is kept for backwards compatibility.
 
-        prompt = f"""## Analysis Summary
-{analysis_summary}
-
-## Current preprocess.py
+        analysis_section = f"## Analysis Summary\n{analysis_summary}\n\n" if analysis_summary else ""
+        prompt = f"""{analysis_section}## Current preprocess.py
 ```python
 {current_code}
 ```
@@ -437,10 +435,8 @@ IMPORTANT: Each hypothesis code must be complete and self-contained. It should d
         # for backwards compatibility, but priming the agent with "you MUST target
         # these queries" has been shown to cause overfitting on unfixable cases.
 
-        prompt = f"""## Analysis Summary
-{analysis_summary}
-
-## Current preprocess.py
+        analysis_section = f"## Analysis Summary\n{analysis_summary}\n\n" if analysis_summary else ""
+        prompt = f"""{analysis_section}## Current preprocess.py
 ```python
 {current_code}
 ```
@@ -530,6 +526,7 @@ Repeat for H2{', H3, H4' if n >= 4 else ''} (output exactly {n} hypotheses).
         """Phase 2: Generate code for a single hypothesis idea (async LLM call)."""
         from .llm_call import async_completion
 
+        analysis_section = f"## Brief Analysis Context\n{analysis_summary[:2000]}\n\n" if analysis_summary else ""
         prompt = f"""## Task
 Write a complete, working `preprocess.py` implementation for this hypothesis:
 
@@ -541,10 +538,7 @@ Rationale: {idea.get('rationale', '')}
 {current_code}
 ```
 
-## Brief Analysis Context
-{analysis_summary[:2000]}
-
-## Requirements
+{analysis_section}## Requirements
 - Output ONLY a single ```python``` code block with the complete preprocess.py
 - The code MUST start with the standard imports:
 ```python
@@ -847,10 +841,8 @@ from base import BasePreprocessor
 
 """
 
-        prompt = f"""## Analysis Summary
-{analysis_summary}
-
-## Proven Hypotheses
+        analysis_section = f"## Analysis Summary\n{analysis_summary}\n\n" if analysis_summary else ""
+        prompt = f"""{analysis_section}## Proven Hypotheses
 {proven_text}
 
 ## Current preprocess.py
