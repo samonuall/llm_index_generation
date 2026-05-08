@@ -70,8 +70,9 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     logger.info("one_shot run start: model=%s split=%s", model, split)
 
     print("[one_shot] Loading data ...")
-    documents, queries = _load_data(split)
-    print(f"[one_shot] {len(documents)} docs, {len(queries)} queries.")
+    documents, val_queries, eval_queries = _load_data(split)
+    queries = eval_queries  # one_shot evaluates on the held-out set
+    print(f"[one_shot] {len(documents)} docs, {len(val_queries)} val + {len(eval_queries)} eval queries.")
 
     # --- Start BM25 server ---
     server_port = config.get("server_port", 8765)

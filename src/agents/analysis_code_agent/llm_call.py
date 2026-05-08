@@ -75,6 +75,7 @@ def _call_litellm(
         temperature=temperature,
         api_key=api_key,
         api_base=api_base,
+        num_retries=3,  # auto-retry transient errors (overloaded, 503, timeouts) with exponential backoff
         **kwargs,
     )
     if timeout is not None:
@@ -118,6 +119,7 @@ async def _acall_litellm(
         temperature=temperature,
         api_key=api_key,
         api_base=api_base,
+        num_retries=3,  # auto-retry transient errors (overloaded, 503, timeouts) with exponential backoff
         **kwargs,
     )
     if timeout is not None:
