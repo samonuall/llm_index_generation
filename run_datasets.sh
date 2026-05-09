@@ -127,10 +127,15 @@ cd \$SLURM_SUBMIT_DIR
 
 source \$HOME/.local/bin/env
 
-# Download data if not exists
-if [ ! -d "data/${name}" ]; then
-    echo "Downloading dataset: ${name}"
-    uv run python -m src.evaluation.scripts.get_data --split ${name}
+# Download data if any required file is missing — checking the directory alone
+# is unsafe: a partial / interrupted previous download leaves the dir present
+# but documents.jsonl absent, and the agent crashes on _load_data.
+if [ ! -f "data/${name}/documents.jsonl" ] || [ ! -f "data/${name}/validation_queries.jsonl" ] || [ ! -f "data/${name}/evaluation_queries.jsonl" ]; then
+    echo "[runtime] Data missing for ${name}, downloading ..."
+    uv run python -m src.evaluation.scripts.get_data --split ${name} || {
+        echo "[runtime] ERROR: get_data failed for ${name}"
+        exit 2
+    }
 fi
 
 # Snapshot existing result files so we can identify the one this run produces
