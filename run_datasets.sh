@@ -1,15 +1,21 @@
 #!/bin/bash
 
 # Dataset specifications: name|docs|queries|mem|time|cpus
+# Resource notes (after first ablation pass):
+#   - paper_retrieval bumped to 96G/12h: agent_noinput timed out at 6h.
+#   - set_op / clinical_trial / tip_of_the_tongue bumped to 128G/24h: agent_noinput
+#     timed out at 12h (BM25 reindex per hypothesis × 1M docs is the slow path).
+#   - legal_qa bumped to 192G/24h: agent_noinput OOM'd at 96G (6,753 queries
+#     materialised on top of the multi-hypothesis index footprint).
 DATASET_SPECS=(
     "theorem_retrieval|23,839|69|32G|02:00:00|4"
     "stack_exchange|40,956|107|32G|02:00:00|4"
     "code_retrieval|232,444|3,665|64G|06:00:00|8"
-    "paper_retrieval|363,133|72|64G|06:00:00|8"
-    "set_operation_entity_retrieval|651,704|423|96G|12:00:00|12"
-    "clinical_trial|914,628|113|96G|12:00:00|12"
-    "tip_of_the_tongue|1,083,337|135|96G|12:00:00|12"
-    "legal_qa|1,182,626|6,753|96G|12:00:00|12"
+    "paper_retrieval|363,133|72|96G|12:00:00|8"
+    "set_operation_entity_retrieval|651,704|423|128G|24:00:00|12"
+    "clinical_trial|914,628|113|128G|24:00:00|12"
+    "tip_of_the_tongue|1,083,337|135|128G|24:00:00|12"
+    "legal_qa|1,182,626|6,753|192G|24:00:00|12"
 )
 
 echo "=========================================="
