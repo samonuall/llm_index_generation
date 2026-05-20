@@ -6,7 +6,11 @@ Usage:
     python -m src.evaluation.scripts.get_data --split tip_of_the_tongue
     python -m src.evaluation.scripts.get_data --split code_retrieval --limit 5000
 
+    # Download passage corpus instead of full document corpus:
+    python -m src.evaluation.scripts.get_data --split clinical_trial --corpus passage
+
 Caches to: data/<split>/documents.jsonl and data/<split>/queries.jsonl
+  (passage corpus uses passages.jsonl and passage_*_queries.jsonl)
 Re-running with --limit overwrites existing cached data for that split.
 """
 
@@ -52,11 +56,23 @@ def get_cache_dir(split: str) -> Path:
     return cache_dir
 
 
-def load_queries(split: str, n_queries: int = None) -> tuple[List[Dict], List[Dict]]:
+def load_queries(split: str, n_queries: int = None, corpus_type: str = "full_document") -> tuple[List[Dict], List[Dict]]:
+    """Load (or download) queries for the given split.
+
+    Args:
+        corpus_type: "full_document" or "passage".  Controls which qrels field
+                     is used for relevant_doc_ids and which cache files are read/written.
+    """
     crumb_name = SPLIT_MAP[split]
     cache_dir = get_cache_dir(split)
-    val_cache_file = cache_dir / "validation_queries.jsonl"
-    eval_cache_file = cache_dir / "evaluation_queries.jsonl"
+
+    # File names differ by corpus type so both can coexist in the same directory.
+    if corpus_type == "passage":
+        val_cache_file = cache_dir / "passage_validation_queries.jsonl"
+        eval_cache_file = cache_dir / "passage_evaluation_queries.jsonl"
+    else:
+        val_cache_file = cache_dir / "validation_queries.jsonl"
+        eval_cache_file = cache_dir / "evaluation_queries.jsonl"
 
     # Fast path: both cache files exist
     if val_cache_file.exists() and eval_cache_file.exists():
@@ -68,11 +84,15 @@ def load_queries(split: str, n_queries: int = None) -> tuple[List[Dict], List[Di
 
     # Download path: fetch both CRUMB splits, pool, then apply our split JSON
     def _download_crumb_split(crumb_split_name: str) -> List[Dict]:
-        print(f"Downloading {crumb_split_name} for {split}...")
+        print(f"Downloading {crumb_split_name} for {split} (corpus_type={corpus_type})...")
         dataset = load_dataset("jfkback/crumb", crumb_split_name, split=crumb_name)
         queries = []
         for item in dataset:
-            qrels = item.get("full_document_qrels") or item.get("passage_qrels") or []
+            # Select the correct qrels based on corpus type.
+            if corpus_type == "passage":
+                qrels = item.get("passage_binary_qrels") or item.get("passage_qrels") or []
+            else:
+                qrels = item.get("full_document_qrels") or item.get("passage_qrels") or []
             relevant_ids = [q["id"] for q in qrels if q.get("label", 0) > 0]
             if relevant_ids:
                 queries.append({
@@ -182,6 +202,78 @@ def load_full_corpus_streaming(split: str, max_docs: Optional[int] = None) -> Li
     return docs
 
 
+def load_passage_corpus_streaming(split: str, max_docs: Optional[int] = None) -> List[Dict]:
+    """
+    Download passage corpus using STREAMING.
+
+    The passage corpus contains pre-chunked passages.  Each passage has a
+    ``document_id`` (used as ``doc_id``), ``document_content`` (text), and
+    ``parent_id`` (the full-document ID it was extracted from).
+
+    Cached to: data/<split>/passages.jsonl
+    """
+    crumb_name = SPLIT_MAP[split]
+    cache_dir = get_cache_dir(split)
+    cache_file = cache_dir / "passages.jsonl"
+
+    if cache_file.exists():
+        print(f"✓ Loading cached passage corpus from {cache_file}")
+        with cache_file.open("r") as f:
+            docs = [json.loads(line) for line in f]
+        print(f"  Loaded {len(docs)} passages")
+        return docs
+
+    if max_docs:
+        print(f"Downloading passage corpus for {split} (streaming mode, limit={max_docs:,})...")
+    else:
+        print(f"Downloading passage corpus for {split} (streaming mode)...")
+
+    corpus_dataset = load_dataset(
+        "jfkback/crumb",
+        "passage_corpus",
+        split=crumb_name,
+        streaming=True,
+    )
+
+    docs = []
+    print("  Streaming passages...")
+
+    try:
+        pbar = tqdm(total=max_docs, unit=" passages")
+        for item in corpus_dataset:
+            docs.append({
+                "doc_id": str(item["document_id"]),
+                "text": item["document_content"],
+                "metadata": {"parent_id": item.get("parent_id")},
+            })
+            pbar.update(1)
+
+            if max_docs and len(docs) >= max_docs:
+                break
+        pbar.close()
+    except ImportError:
+        for item in corpus_dataset:
+            docs.append({
+                "doc_id": str(item["document_id"]),
+                "text": item["document_content"],
+                "metadata": {"parent_id": item.get("parent_id")},
+            })
+            if len(docs) % 10000 == 0:
+                print(f"    Downloaded {len(docs):,} passages...")
+
+            if max_docs and len(docs) >= max_docs:
+                break
+
+    print(f"\n  Total downloaded: {len(docs):,} passages")
+
+    print(f"Caching to {cache_file}")
+    with cache_file.open("w") as f:
+        for doc in docs:
+            f.write(json.dumps(doc) + "\n")
+
+    return docs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download CRUMB corpus + queries (STREAMING)")
     parser.add_argument(
@@ -209,33 +301,49 @@ def main():
         help="Limit number of documents to download (default: all)"
     )
 
+    parser.add_argument(
+        "--corpus",
+        type=str,
+        default="full_document",
+        choices=["full_document", "passage"],
+        help="Corpus type to download: full_document (default) or passage",
+    )
+
     args = parser.parse_args()
 
     if not args.all and not args.split:
         parser.error("Either --split <name> or --all is required.")
 
     splits = list(SPLIT_MAP.keys()) if args.all else [args.split]
+    corpus_type = args.corpus
 
     for split in splits:
         cache_dir = get_cache_dir(split)
         print(f"\n{'='*70}")
-        print(f"CRUMB Data Download (Streaming) — Split: {split}")
+        print(f"CRUMB Data Download (Streaming) — Split: {split}  Corpus: {corpus_type}")
         if args.limit:
             print(f"Document limit: {args.limit:,}")
         print(f"Cache directory: {cache_dir}")
         print(f"{'='*70}\n")
 
-        val_queries, eval_queries = load_queries(split, args.n_queries)
-        docs = load_full_corpus_streaming(split, args.limit)
+        val_queries, eval_queries = load_queries(split, args.n_queries, corpus_type=corpus_type)
+
+        if corpus_type == "passage":
+            docs = load_passage_corpus_streaming(split, args.limit)
+            doc_label = "passages"
+        else:
+            docs = load_full_corpus_streaming(split, args.limit)
+            doc_label = "documents"
 
         val_relevant_ids = {str(rid) for q in val_queries for rid in q["relevant_doc_ids"]}
         eval_relevant_ids = {str(rid) for q in eval_queries for rid in q["relevant_doc_ids"]}
         print(f"\n{'='*70}")
         print(f"✓ Download complete")
         print(f"  Split       : {split}")
-        print(f"  Val Queries : {len(val_queries)} ({len(val_relevant_ids)} relevant docs)")
-        print(f"  Eval Queries: {len(eval_queries)} ({len(eval_relevant_ids)} relevant docs)")
-        print(f"  Total docs  : {len(docs):,}")
+        print(f"  Corpus      : {corpus_type}")
+        print(f"  Val Queries : {len(val_queries)} ({len(val_relevant_ids)} relevant {doc_label})")
+        print(f"  Eval Queries: {len(eval_queries)} ({len(eval_relevant_ids)} relevant {doc_label})")
+        print(f"  Total {doc_label:8s}: {len(docs):,}")
         print(f"  Location    : {cache_dir}")
         print(f"{'='*70}\n")
 

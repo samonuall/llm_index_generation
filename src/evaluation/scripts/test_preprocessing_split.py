@@ -40,15 +40,40 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# [Keep all existing data loading functions unchanged]
+# Constants
 # ---------------------------------------------------------------------------
 
-def _load_documents(split: str = None) -> tuple[List[Document], str]:
-    """Load documents from split-specific cache, or fallback to default."""
+# Passage corpus splits that require MaxP aggregation by parent document.
+# These splits have document-level labels, not per-passage labels.
+# See: https://huggingface.co/datasets/jfkback/crumb#how-to-use-and-evaluate
+MAXP_PASSAGE_SPLITS = {"clinical_trial", "tip_of_the_tongue", "set_operation_entity_retrieval"}
+
+
+def _needs_passage_maxp(split: str, corpus_type: str) -> bool:
+    """Return True if this split+corpus needs MaxP parent-document aggregation."""
+    if corpus_type != "passage":
+        return False
+    import re
+    base_split = re.sub(r"_\d+docs$", "", split)
+    return base_split in MAXP_PASSAGE_SPLITS
+
+
+# ---------------------------------------------------------------------------
+# Data loading helpers
+# ---------------------------------------------------------------------------
+
+def _load_documents(split: str = None, corpus_type: str = "full_document") -> tuple[List[Document], str]:
+    """Load documents from split-specific cache, or fallback to default.
+
+    Args:
+        corpus_type: "full_document" or "passage".  When "passage", loads from
+                     passages.jsonl instead of documents.jsonl.
+    """
+    docs_filename = "passages.jsonl" if corpus_type == "passage" else "documents.jsonl"
     if split:
-        docs_file = DATA_DIR / split / "documents.jsonl"
+        docs_file = DATA_DIR / split / docs_filename
         if docs_file.exists():
-            print(f"✓ Using cached data for split: {split}")
+            print(f"✓ Using cached data for split: {split} (corpus: {corpus_type})")
             docs = []
             with docs_file.open(encoding="utf-8") as f:
                 for line in f:
@@ -58,10 +83,18 @@ def _load_documents(split: str = None) -> tuple[List[Document], str]:
     raise FileNotFoundError(f"No data found!")
 
 
-def _load_queries(split: str = None) -> tuple[List[EvalQuery], str]:
-    """Load queries from split-specific cache, or fallback to default."""
+def _load_queries(split: str = None, corpus_type: str = "full_document") -> tuple[List[EvalQuery], str]:
+    """Load queries from split-specific cache, or fallback to default.
+
+    Args:
+        corpus_type: "full_document" or "passage".  When "passage", loads from
+                     passage_evaluation_queries.jsonl / passage_validation_queries.jsonl.
+    """
     if split:
-        queries_file = DATA_DIR / split / "evaluation_queries.jsonl"
+        if corpus_type == "passage":
+            queries_file = DATA_DIR / split / "passage_evaluation_queries.jsonl"
+        else:
+            queries_file = DATA_DIR / split / "evaluation_queries.jsonl"
         if queries_file.exists():
             queries = []
             with queries_file.open(encoding="utf-8") as f:
@@ -333,6 +366,7 @@ def evaluate(
     save_results: bool = True,
     iteration: Optional[int] = None,  # NEW: iteration number
     track_iterations: bool = False,   # NEW: enable iteration tracking
+    corpus_type: str = "full_document",  # NEW: corpus type
 ) -> dict:
     """
     Run evaluation with optional iteration tracking.
@@ -340,9 +374,10 @@ def evaluate(
     Args:
         iteration: If provided, saves with iteration number in filename
         track_iterations: If True, appends to iteration history file
+        corpus_type: "full_document" or "passage" — selects which data files to load
     """
-    docs, actual_split = _load_documents(split)
-    queries, _ = _load_queries(split)
+    docs, actual_split = _load_documents(split, corpus_type=corpus_type)
+    queries, _ = _load_queries(split, corpus_type=corpus_type)
 
     agent_name = preprocessor.name or type(preprocessor).__name__
     
@@ -367,6 +402,19 @@ def evaluate(
     print("Building BM25 index ...")
     index = BM25Index(chunks, candidate_k=10000, agg="max")
 
+    # Determine if MaxP parent-document aggregation is needed.
+    # For passage corpus on clinical_trial, tip_of_the_tongue, and
+    # set_operation_entity_retrieval, CRUMB recommends aggregating passage
+    # scores to their parent document before computing metrics.
+    use_passage_maxp = _needs_passage_maxp(actual_split, corpus_type)
+    parent_map: Dict[str, str] = {}
+    if use_passage_maxp:
+        for doc in docs:
+            pid = (doc.metadata or {}).get("parent_id")
+            if pid:
+                parent_map[doc.doc_id] = str(pid)
+        print(f"  MaxP passage mode: {len(parent_map)} passages mapped to parent docs")
+
     # [Keep all existing retrieval and metrics computation code]
     query_results = []
     recall_at_100_hits = 0
@@ -382,7 +430,17 @@ def evaluate(
             sc = float(score)
             if doc_id not in doc_scores or sc > doc_scores[doc_id]:
                 doc_scores[doc_id] = sc
-        
+
+        # MaxP parent-document aggregation for passage corpus.
+        # Map passage-level scores to parent document scores (take max).
+        if use_passage_maxp and parent_map:
+            parent_scores: Dict[str, float] = {}
+            for passage_id, score in doc_scores.items():
+                pid = parent_map.get(passage_id, passage_id)
+                if pid not in parent_scores or score > parent_scores[pid]:
+                    parent_scores[pid] = score
+            doc_scores = parent_scores
+
         # Sort ALL docs, don't truncate yet (we need 1000 for recall calculation)
         ranked_docs_full = sorted(doc_scores.items(), key=lambda x: (-x[1], x[0]))
         ranked_doc_ids = [doc_id for doc_id, _ in ranked_docs_full]
@@ -394,8 +452,12 @@ def evaluate(
             "query_id": query.query_id,
             "ranked_docs": ranked_docs,
         })
-        
-        relevant = set(map(str, query.relevant_doc_ids))
+
+        # Map relevant IDs to parent level when using MaxP.
+        if use_passage_maxp and parent_map:
+            relevant = set(parent_map.get(str(rid), str(rid)) for rid in query.relevant_doc_ids)
+        else:
+            relevant = set(map(str, query.relevant_doc_ids))
         n_relevant = len(relevant) or 1
 
         recall_at_100_hits += len(relevant & set(ranked_doc_ids[:100])) / n_relevant
@@ -523,6 +585,13 @@ def main() -> None:
         action="store_true",
         help="Compare with previous results after evaluation",
     )
+    parser.add_argument(
+        "--corpus",
+        type=str,
+        default="full_document",
+        choices=["full_document", "passage"],
+        help="Corpus type: full_document (default) or passage",
+    )
 
     args = parser.parse_args()
 
@@ -565,6 +634,7 @@ def main() -> None:
         save_results=not args.no_save,
         iteration=args.iteration,
         track_iterations=args.track_iterations,
+        corpus_type=args.corpus,
     )
 
     # Compare with previous results if requested
