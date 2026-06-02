@@ -62,14 +62,7 @@ fi
 
 # ── Splits to run ────────────────────────────────────────────────────────────
 SPLITS=(
-    tip_of_the_tongue
-    paper_retrieval
-    clinical_trial
     legal_qa
-    code_retrieval
-    set_operation_entity_retrieval
-    theorem_retrieval
-    stack_exchange
 )
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
@@ -123,3 +116,4 @@ if [ ${#FAILED[@]} -gt 0 ]; then
     echo "  Skipped/failed: ${FAILED[*]}"
 fi
 ls -lt results/**/*.json results/*.json 2>/dev/null | head -20 || true
+

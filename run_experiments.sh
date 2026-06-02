@@ -62,6 +62,7 @@ AGENT_PREPROCESS="src/agents/analysis_code_agent/preprocess.py"
 CONFIG="src/agents/analysis_code_agent/config.yaml"
 
 LOOPS=$(uv run python -c "import yaml; c=yaml.safe_load(open('$CONFIG')); print(c.get('n_loops', 5))")
+SERVER_PORT=$(uv run python -c "import yaml; c=yaml.safe_load(open('$CONFIG')); print(c.get('server_port', 8765))")
 
 # Check data is downloaded
 if [ ! -f "data/${SPLIT}/documents.jsonl" ] || [ ! -f "data/${SPLIT}/validation_queries.jsonl" ] || [ ! -f "data/${SPLIT}/evaluation_queries.jsonl" ]; then
@@ -78,7 +79,7 @@ echo "  $(wc -l < data/${SPLIT}/validation_queries.jsonl) val queries, $(wc -l <
 echo "=============================================="
 
 cleanup_port() {
-    local port=8765
+    local port="$SERVER_PORT"
     local pid
     pid=$(lsof -i :$port -t 2>/dev/null || true)
     if [ -n "$pid" ]; then

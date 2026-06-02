@@ -1,11 +1,11 @@
-analysis_model: "qwen/qwen3-coder"
+analysis_model: "openai/claude-sonnet-4-6"
 analysis_temperature: 1.0
-code_model: "qwen/qwen3-coder"
+code_model: "openai/claude-sonnet-4-6"
 code_temperature: 1.0
-api_base: "https://openrouter.ai/api/v1"
+api_base: "https://thekeymaker.umass.edu/v1"
 n_loops: 5
 
-server_port: 8765
+server_port: 8767
 server_persist_dir: ".bm25_cache"
 server_startup_timeout: 300      # 5 minutes - safe for large indexes
 preprocess_timeout_seconds: 900  # 15 minutes - middle ground
