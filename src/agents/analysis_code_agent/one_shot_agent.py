@@ -35,7 +35,12 @@ def run_one_shot(split: str = "tip_of_the_tongue", model: str | None = None, api
     model = model or config.get("code_model", "openai/gpt4o")
     # Only pass api_key explicitly when using the proxy (api_base set).
     # For native provider endpoints (e.g. Gemini), let LiteLLM read the key from env.
-    proxy_api_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+    proxy_api_key = (
+        os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("LITE_LLM_KEY")
+        or os.environ.get("LITELLM_API_KEY")
+        or ""
+    )
     # If api_base explicitly provided, use it. If model was overridden but no api_base given,
     # use None so LiteLLM routes to the provider's native endpoint (e.g. Google for gemini/).
     # Only fall back to config api_base when using the default model (no override).

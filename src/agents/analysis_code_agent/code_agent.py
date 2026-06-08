@@ -66,7 +66,12 @@ class CodeAgent:
         self._temperature = config.get("code_temperature", 0.7)
         self._api_base = config.get("api_base")  # None = use provider's native endpoint
         # Only pass api_key explicitly for proxy; native providers read key from env.
-        _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+        _proxy_key = (
+            os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("LITE_LLM_KEY")
+            or os.environ.get("LITELLM_API_KEY")
+            or ""
+        )
         self._api_key = _proxy_key if self._api_base else None
         self._llm_timeout = config.get("code_llm_timeout", None)
         self._recall_threshold = config.get("recall_improvement_threshold", 0.05)

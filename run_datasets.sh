@@ -26,8 +26,9 @@ echo "Available Models:"
 echo "[1] sonnet  (openai/claude-sonnet-4-6 via UMass keymaker — recommended)"
 echo "[2] haiku"
 echo "[3] gpt4o"
+echo "[4] qwen3coder  (openai/qwen/qwen3-coder via OpenRouter — needs OPENROUTER_API_KEY)"
 echo ""
-read -p "Select model (1-3): " model_selection
+read -p "Select model (1-4): " model_selection
 
 API_BASE=""
 case $model_selection in
@@ -40,6 +41,14 @@ case $model_selection in
         ;;
     3)
         MODEL="gpt4o"
+        ;;
+    4)
+        MODEL="openai/qwen/qwen3-coder"
+        API_BASE="https://openrouter.ai/api/v1"
+        if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "ERROR: OPENROUTER_API_KEY env var not set. Run: export OPENROUTER_API_KEY=<your-key>"
+            exit 1
+        fi
         ;;
     *)
         echo "Invalid model selection. Exiting."

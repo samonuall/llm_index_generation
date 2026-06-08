@@ -75,7 +75,12 @@ class AnalysisAgent:
         self._n_hard_negatives_shown = config.get("n_hard_negatives_shown", 5)
         self._n_successes_shown = config.get("n_successes_shown", 8)
         # Only pass api_key explicitly for proxy; native providers read key from env.
-        _proxy_key = os.environ.get("LITE_LLM_KEY", os.environ.get("LITELLM_API_KEY", ""))
+        _proxy_key = (
+            os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("LITE_LLM_KEY")
+            or os.environ.get("LITELLM_API_KEY")
+            or ""
+        )
         self._api_key = _proxy_key if config.get("api_base") else None
         self._api_base = config.get("api_base", "https://thekeymaker.umass.edu/")
 
