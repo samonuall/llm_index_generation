@@ -140,7 +140,11 @@ submit_job() {
 # Go to the directory where the job was submitted from
 cd \$SLURM_SUBMIT_DIR
 
-source \$HOME/.local/bin/env
+# Defensive: kill any orphan BM25 server from a previous job on this node
+pkill -u \$USER -f 'bm25_server' 2>/dev/null || true
+sleep 2
+
+export PATH="$HOME/.local/bin:$PATH"
 
 # Download data if any required file is missing — checking the directory alone
 # is unsafe: a partial / interrupted previous download leaves the dir present
@@ -160,7 +164,7 @@ ls -1 results/*/*.json 2>/dev/null | sort > "\$RESULTS_BEFORE"
 # Run the agent with specified model — capture wall time at the bash layer
 START_EPOCH=\$(date +%s)
 echo "[runtime] start=\$(date -u +%Y-%m-%dT%H:%M:%SZ) split=${name} model=${model} condition=${condition} api_base=${api_base:-<native>}"
-uv run python main.py --agent analysis_code_agent --loops 3 --condition ${condition} --split ${name} --model ${model} ${api_base:+--api-base "${api_base}"}
+uv run python main.py --agent analysis_code_agent --loops 5 --condition ${condition} --split ${name} --model ${model} ${api_base:+--api-base "${api_base}"}
 EXIT_CODE=\$?
 END_EPOCH=\$(date +%s)
 ELAPSED=\$((END_EPOCH - START_EPOCH))
