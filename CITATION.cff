@@ -15,7 +15,7 @@ authors:
   - family-names: "Drozdov"
     given-names: "Andrew"
 license: MIT
-repository-code: "https://github.com/samonuall/autoindex"
+repository-code: "https://github.com/auto-index/autoindex"
 preferred-citation:
   type: article
   title: "AutoIndex: Learning Representation Programs for Retrieval"

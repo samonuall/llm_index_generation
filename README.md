@@ -82,7 +82,7 @@ autoindex/
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/samonuall/autoindex.git
+git clone https://github.com/auto-index/autoindex.git
 cd autoindex
 uv sync
 ```
