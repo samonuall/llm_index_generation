@@ -185,26 +185,26 @@ def patched_load_data(tmp_data_dir, monkeypatch):
 class TestReservoirSampling:
 
     def test_none_loads_all_docs(self, patched_load_data):
-        docs, queries = patched_load_data("test_split", corpus_size=None)
+        docs, val_queries, eval_queries = patched_load_data("test_split", corpus_size=None)
         assert len(docs) == 8
         assert {d.doc_id for d in docs} == _ALL_IDS
 
     def test_corpus_size_larger_than_corpus_loads_all(self, patched_load_data):
-        docs, queries = patched_load_data("test_split", corpus_size=100)
+        docs, val_queries, eval_queries = patched_load_data("test_split", corpus_size=100)
         assert len(docs) == 8
 
     def test_gold_docs_always_included(self, patched_load_data):
-        docs, queries = patched_load_data("test_split", corpus_size=6, seed=0)
+        docs, val_queries, eval_queries = patched_load_data("test_split", corpus_size=6, seed=0)
         doc_ids = {d.doc_id for d in docs}
         assert _GOLD_IDS.issubset(doc_ids), f"Missing gold docs: {_GOLD_IDS - doc_ids}"
 
     def test_total_count_respects_corpus_size(self, patched_load_data):
-        docs, _ = patched_load_data("test_split", corpus_size=6, seed=0)
+        docs, _, _ = patched_load_data("test_split", corpus_size=6, seed=0)
         assert len(docs) == 6
 
     def test_corpus_size_equals_gold_count_no_non_gold(self, patched_load_data):
         # corpus_size = 5 = exact number of gold docs → no non-gold docs sampled
-        docs, _ = patched_load_data("test_split", corpus_size=5, seed=0)
+        docs, _, _ = patched_load_data("test_split", corpus_size=5, seed=0)
         doc_ids = {d.doc_id for d in docs}
         assert doc_ids == _GOLD_IDS
 
@@ -214,11 +214,14 @@ class TestReservoirSampling:
         # Run several seed pairs and assert at least one produces a different non-gold set.
         non_gold_sets = set()
         for seed in range(10):
-            docs, _ = patched_load_data("test_split", corpus_size=6, seed=seed)
+            docs, _, _ = patched_load_data("test_split", corpus_size=6, seed=seed)
             non_gold = frozenset(d.doc_id for d in docs) - _GOLD_IDS
             non_gold_sets.add(non_gold)
         assert len(non_gold_sets) > 1, "All seeds produced the same non-gold sample"
 
     def test_queries_always_fully_loaded(self, patched_load_data):
-        _, queries = patched_load_data("test_split", corpus_size=5)
-        assert len(queries) == 5
+        # With only queries.jsonl present, _load_data falls back to using it for
+        # both the validation and evaluation query sets.
+        _, val_queries, eval_queries = patched_load_data("test_split", corpus_size=5)
+        assert len(val_queries) == 5
+        assert len(eval_queries) == 5

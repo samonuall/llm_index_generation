@@ -20,6 +20,9 @@
 
 set -euo pipefail
 
+# Always operate from the repository root.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
 show_help() {
     cat <<EOF
 Usage: $0 [--split NAME] [--max-distractors N] [--model MODEL] [--api-base URL]

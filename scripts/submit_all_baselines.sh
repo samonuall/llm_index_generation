@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# Always submit from the repository root so $SLURM_SUBMIT_DIR is the repo root.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # split|mem|time|cpus  — sized for BM25 indexing only, no LLM
 SPECS=(
     "theorem_retrieval|16G|01:00:00|4"
@@ -20,6 +23,6 @@ for spec in "${SPECS[@]}"; do
         --mem="${mem}" \
         --cpus-per-task="${cpus}" \
         --export=ALL,SPLIT="${split}" \
-        unity_baseline.slurm
+        scripts/unity_baseline.slurm
     sleep 0.3
 done

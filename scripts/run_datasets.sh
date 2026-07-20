@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Always operate from the repository root (slurm jobs cd back via $SLURM_SUBMIT_DIR).
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
 # Dataset specifications: name|docs|queries|mem|time|cpus
 # Resource notes (after first ablation pass):
 #   - paper_retrieval bumped to 96G/12h: agent_noinput timed out at 6h.
@@ -19,7 +22,7 @@ DATASET_SPECS=(
 )
 
 echo "=========================================="
-echo "   LLM Index Generation - Dataset Runner"
+echo "   AutoIndex - Dataset Runner"
 echo "=========================================="
 echo ""
 echo "Available Models:"

@@ -20,7 +20,7 @@ fi
 START_EPOCH=$(date +%s)
 echo "[runtime] start=$(date -u +%Y-%m-%dT%H:%M:%SZ) split=${SPLIT} agent=baseline"
 
-uv run python main.py \
+uv run python src/evaluation/scripts/test_preprocessing_split.py \
     --agent baseline \
     --split "${SPLIT}"
 EXIT_CODE=$?

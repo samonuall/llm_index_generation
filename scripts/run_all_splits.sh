@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# Always operate from the repository root.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
 # ── Splits to run ────────────────────────────────────────────────────────────
 SPLITS=(
     tip_of_the_tongue
@@ -59,7 +62,7 @@ for SPLIT in "${SPLITS[@]}"; do
         continue
     fi
 
-    bash run_experiments.sh --split "${SPLIT}" $MODEL_ARGS || {
+    bash scripts/run_experiments.sh --split "${SPLIT}" $MODEL_ARGS || {
         echo "  ERROR: ${SPLIT} failed"
         FAILED+=("${SPLIT} (error)")
     }

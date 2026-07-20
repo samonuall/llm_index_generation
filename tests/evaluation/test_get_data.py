@@ -148,7 +148,8 @@ class TestQueryStructureValidation:
         split = "tip_of_the_tongue"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         
         queries = [
             {
@@ -168,7 +169,8 @@ class TestQueryStructureValidation:
                 f.write(json.dumps(q) + "\n")
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         assert len(loaded_queries) == 2
         for query in loaded_queries:
@@ -181,7 +183,8 @@ class TestQueryStructureValidation:
         split = "legal_qa"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         
         queries = [
             {"query_id": "q1", "query_content": "test", "relevant_doc_ids": ["d1"]},
@@ -193,7 +196,8 @@ class TestQueryStructureValidation:
                 f.write(json.dumps(q) + "\n")
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         for query in loaded_queries:
             assert isinstance(query["relevant_doc_ids"], list)
@@ -203,7 +207,8 @@ class TestQueryStructureValidation:
         split = "clinical_trial"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         
         queries = [
             {
@@ -218,7 +223,8 @@ class TestQueryStructureValidation:
                 f.write(json.dumps(q) + "\n")
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         assert "Café" in loaded_queries[0]["query_content"]
         assert "日本語" in loaded_queries[0]["query_content"]
@@ -245,11 +251,13 @@ class TestJSONLFormatValidation:
         split = "set_operation_entity_retrieval"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         queries_file.touch()
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         assert loaded_queries == []
     
@@ -291,7 +299,8 @@ class TestDataIntegrityAndConsistency:
                 f.write(json.dumps(doc) + "\n")
         
         # Create queries referencing these docs
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         queries = [
             {"query_id": "q1", "query_content": "query 1", "relevant_doc_ids": ["d1"]},
             {"query_id": "q2", "query_content": "query 2", "relevant_doc_ids": ["d2", "d3"]},
@@ -302,7 +311,8 @@ class TestDataIntegrityAndConsistency:
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
             loaded_docs = load_full_corpus_streaming(split)
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         # Validate consistency
         doc_ids = {doc["doc_id"] for doc in loaded_docs}
@@ -339,7 +349,8 @@ class TestDataIntegrityAndConsistency:
         split = "code_retrieval"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         
         queries = [
             {"query_id": "q1", "query_content": "Query 1", "relevant_doc_ids": ["d1"]},
@@ -352,7 +363,8 @@ class TestDataIntegrityAndConsistency:
                 f.write(json.dumps(q) + "\n")
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         query_ids = [q["query_id"] for q in loaded_queries]
         assert len(query_ids) == len(set(query_ids)), "Duplicate query_ids found"
@@ -386,7 +398,8 @@ class TestCacheBehavior:
         split = "theorem_retrieval"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         
         cached_queries = [
             {"query_id": "cached_q", "query_content": "From cache", "relevant_doc_ids": ["d1"]}
@@ -396,7 +409,8 @@ class TestCacheBehavior:
                 f.write(json.dumps(q) + "\n")
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         assert len(loaded_queries) == 1
         assert loaded_queries[0]["query_id"] == "cached_q"
@@ -462,7 +476,8 @@ class TestEdgeCases:
         split = "set_operation_entity_retrieval"
         cache_dir = tmp_path / split
         cache_dir.mkdir()
-        queries_file = cache_dir / "queries.jsonl"
+        queries_file = cache_dir / "validation_queries.jsonl"
+        (cache_dir / "evaluation_queries.jsonl").touch()
         
         queries = [
             {
@@ -477,7 +492,8 @@ class TestEdgeCases:
                 f.write(json.dumps(q) + "\n")
         
         with patch('get_data.get_cache_dir', return_value=cache_dir):
-            loaded_queries = load_queries(split)
+            val_queries, eval_queries = load_queries(split)
+        loaded_queries = val_queries + eval_queries
         
         assert "@#$%" in loaded_queries[0]["query_content"]
         assert "<chars>" in loaded_queries[0]["query_content"]

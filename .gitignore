@@ -1,44 +1,37 @@
+# Environment
 .venv
 .env
 **.DS_Store
-mlflow.db
 
-# Python cache
+# Python cache & build artifacts
 **/__pycache__/
 *.pyc
 *.pyo
-
-# Logs
-**/logs/
-*.log
-
-# Data & archives
-data/**
-data/*/
-data/*/*.jsonl
-*.zip
-*.whl
-results/*/
-results_graphs/*/
-
-# Temp files
-*.tmp
-*.temp
-.cache/
-.bm25_cache/
-
-# Agent iterations
-**/iterations/
-
-# Egg-info (build artifacts)
 *.egg-info/
 dist/
 build/
 
+# Logs & temp files
+**/logs/
+*.log
+*.tmp
+*.temp
+.cache/
+.bm25_cache/
 .claude/
 
+# Data (downloaded via src/evaluation/scripts/get_data.py)
+data/
+
+# Archives
+*.zip
+*.whl
+
+# Run outputs
 results/
+results_graphs/
 results_tables/
 ablation_experiments/
 ablation_slurm/
 run_splits_logs/
+**/iterations/

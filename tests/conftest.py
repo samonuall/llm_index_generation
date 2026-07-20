@@ -1,5 +1,5 @@
 """
-Shared test fixtures for the LLM Index Generation test suite.
+Shared test fixtures for the AutoIndex test suite.
 
 All fixtures use small, synthetic data so tests are fast, deterministic,
 and don't require the real CRUMB corpus. The documents and queries are

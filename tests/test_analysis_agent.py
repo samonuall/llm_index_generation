@@ -2,7 +2,7 @@
 Tests for the analysis_code_agent pipeline: config, hypotheses, journal, adoption,
 analysis agent loop, tools, sanitization, and summary request.
 
-Covers requirements R1–R8 from docs/analysis_agent_reqs.md.
+Covers the AnalysisAgent behavioral contracts: config, hypotheses, journal, adoption, tools.
 """
 
 import json

@@ -214,7 +214,8 @@ class TestValidateCode:
         assert error is None
 
     def test_invalid_doc_id_returns_error(self, agent):
-        # Code that strips the section index from doc_id (common mistake)
+        # Code that rewrites doc_id (validation runs on hashed doc_ids, so the
+        # mutation must corrupt any id, not just ids with a ':' separator)
         bad_code = """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "evaluation"))
@@ -227,8 +228,8 @@ class Preprocessor(BasePreprocessor):
     description = "bad doc_id"
     def preprocess(self, docs: List[Document]) -> List[Chunk]:
         return [
-            Chunk(chunk_id=f"{d.doc_id.split(':')[0]}_0",
-                  doc_id=d.doc_id.split(":")[0],  # WRONG: strips :section_idx
+            Chunk(chunk_id=f"{d.doc_id}_0",
+                  doc_id=d.doc_id + "_mangled",  # WRONG: modifies the doc_id
                   text=d.text)
             for d in docs
         ]
@@ -293,10 +294,12 @@ class TestTestHypothesis:
     Run with: uv run pytest -m integration tests/
     """
 
-    # Hypothesis that improves recall: adds rich content to title-stub docs (:0)
+    # Hypothesis that improves recall: adds rich content to title-stub docs.
     # The baseline "current" index has bare title stubs that don't match query terms.
-    # This hypothesis copies the content section text into the title doc's chunk,
+    # This hypothesis merges the text of sections sharing a markdown title heading,
     # giving BM25 enough vocabulary to match queries like "hacker discovers simulation".
+    # (Grouping uses the title line, not doc_id — doc_ids are hashed during validation
+    # and carry no article/section structure.)
     _IMPROVING_CODE = """
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "evaluation"))
@@ -307,14 +310,14 @@ from base import BasePreprocessor
 
 class Preprocessor(BasePreprocessor):
     name = "title_centric"
-    description = "merge all sections into title chunk"
+    description = "merge sections sharing a title heading into each chunk"
     def preprocess(self, docs: List[Document]) -> List[Chunk]:
         articles = collections.defaultdict(list)
         for d in docs:
-            articles[d.doc_id.split(":")[0]].append(d)
+            title = d.text.splitlines()[0] if d.text else ""
+            articles[title].append(d)
         chunks = []
-        for page_id, secs in articles.items():
-            secs.sort(key=lambda d: int(d.doc_id.split(":")[1]))
+        for title, secs in articles.items():
             merged = " ".join(s.text for s in secs)
             for sec in secs:
                 chunks.append(Chunk(
